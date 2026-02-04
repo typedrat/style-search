@@ -8,7 +8,9 @@ An interactive tool for exploring visual style similarity in image collections. 
 - **Interactive Visualization** — Explore the embedding space with UMAP projections and force-directed layouts
 - **Similarity Search** — Find visually similar items using cosine distance
 - **Triplet Training** — Collect comparison judgments to learn a personalized similarity metric
+- **Active Learning** — Intelligent triplet suggestions using uncertainty + diversity sampling
 - **Weighted Distance Learning** — Train dimension weights that reflect your preferences
+- **Multi-Dataset Training** — Combine triplets from multiple datasets for robust metrics
 
 ## How It Works
 
@@ -101,7 +103,9 @@ Open http://localhost:5173 to explore your collection.
 
 ### 4. Train a Similarity Function (Optional)
 
-Navigate to `/train/my-dataset` to collect triplet judgments. Keyboard shortcuts:
+Navigate to `/train/my-dataset` to collect triplet judgments. Use the **Random/Suggested** toggle to choose between random triplets or active learning suggestions (which prioritize uncertain, diverse comparisons).
+
+Keyboard shortcuts:
 
 | Key | Action |
 |-----|--------|
@@ -114,10 +118,16 @@ Navigate to `/train/my-dataset` to collect triplet judgments. Keyboard shortcuts
 Once you have ~100+ judgments, train weights:
 
 ```bash
+# Single dataset
 python -m style_search.train_similarity my-dataset --epochs 100
+
+# Multiple datasets (combines triplets while keeping embeddings scoped)
+python -m style_search.train_similarity dataset1 dataset2 -o combined.safetensors
 ```
 
-This saves learned weights to `data/my-dataset/similarity_weights.pt`.
+This saves learned weights to `data/my-dataset/similarity_weights.safetensors`.
+
+Multi-dataset training is useful when you have the same items rendered by different models—triplets stay scoped to each dataset's embeddings, but the combined training learns weights that generalize across both contexts.
 
 ## API
 
@@ -130,7 +140,10 @@ The FastAPI backend exposes:
 | `GET /api/datasets/{name}/umap` | Get 2D UMAP coordinates |
 | `POST /api/datasets/{name}/similar` | Find similar items |
 | `GET /api/datasets/{name}/distances/{id}` | Get distances from one item to all others |
-| `POST /api/triplets` | Record a triplet judgment |
+| `GET /api/datasets/{name}/suggest-triplet` | Get an active learning triplet suggestion |
+| `POST /api/datasets/{name}/retrain` | Trigger full model retrain |
+| `GET /api/datasets/{name}/model-status` | Get model status (loaded, accuracy, etc.) |
+| `POST /api/triplets` | Record a triplet judgment (triggers warm update) |
 | `GET /api/triplets?dataset=X` | Get triplets for a dataset |
 
 ## Project Structure
@@ -140,7 +153,8 @@ style-search/
 ├── style_search/
 │   ├── api.py              # FastAPI backend
 │   ├── embed_images.py     # Embedding generation CLI
-│   └── train_similarity.py # Weighted distance training
+│   ├── similarity.py       # Model management & active learning
+│   └── train_similarity.py # Weighted distance training CLI
 ├── web/
 │   └── src/
 │       ├── routes/         # TanStack Router pages
@@ -149,7 +163,7 @@ style-search/
 ├── data/
 │   ├── {dataset}/          # Per-dataset storage
 │   │   ├── chroma/         # ChromaDB embeddings
-│   │   └── similarity_weights.pt
+│   │   └── similarity_weights.safetensors
 │   └── triplets.db         # SQLite triplet storage
 └── TRAINING.md             # Detailed training methodology docs
 ```

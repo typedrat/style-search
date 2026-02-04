@@ -27,6 +27,53 @@ Weights are initialized to 1.0 (standard Euclidean) and constrained positive via
 
 ---
 
+## Active Learning
+
+To make labeling more efficient, the system can suggest triplets using uncertainty + diversity sampling instead of random selection.
+
+### Uncertainty Sampling
+
+Triplets where the current model predicts similar distances to both options are more informative:
+
+```
+uncertainty = 1 / (1 + |d(anchor, A) - d(anchor, B)|)
+```
+
+High uncertainty means the model is unsure—your judgment will teach it something new.
+
+### Diversity Sampling
+
+To avoid redundant comparisons:
+
+- **Anchor penalty** — Penalize reusing the same anchor repeatedly
+- **Cluster coverage** — Reward triplets that span different clusters (via KMeans on embeddings)
+
+### Combined Score
+
+```
+score = 0.6 * uncertainty + 0.4 * diversity
+```
+
+The system samples 100 random candidate triplets and returns the one with the highest combined score.
+
+### Warm Updates
+
+After each judgment, the model runs a few gradient steps on recent triplets to stay current. Every 20 triplets, a full retrain runs in the background to consolidate learning.
+
+---
+
+## Multi-Dataset Training
+
+When you have the same items rendered by different base models (e.g., different diffusion models), you can combine triplet judgments while keeping embeddings scoped:
+
+```bash
+python -m style_search.train_similarity dataset1 dataset2 -o combined.safetensors
+```
+
+Each dataset's IDs are prefixed internally (`dataset1:artist_name`), so triplets only compare items within their own embedding space. The combined training learns weights that generalize across both contexts—dimensions that only matter for one model get diluted, while consistently important dimensions get reinforced.
+
+---
+
 ## Alternative Approaches
 
 ### 1. Mahalanobis Distance

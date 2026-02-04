@@ -232,8 +232,55 @@ def evaluate(
     return correct / total if total > 0 else 0.0
 
 
+def load_multi_dataset(
+    db_path: Path, datasets: list[str]
+) -> tuple[list[tuple[str, str, str]], list[tuple[str, str, str]], dict[str, np.ndarray]]:
+    """Load triplets and embeddings from multiple datasets.
+
+    Each dataset's IDs are prefixed with the dataset name to avoid collisions.
+    This allows training on combined triplets while keeping embeddings scoped.
+
+    Returns:
+        triplets: Combined list of (anchor, positive, negative) with prefixed IDs
+        equality_constraints: Combined list of equality constraints with prefixed IDs
+        embeddings: Combined dict mapping prefixed IDs to embeddings
+    """
+    all_triplets = []
+    all_equality = []
+    all_embeddings = {}
+
+    for dataset in datasets:
+        print(f"\nLoading dataset '{dataset}'...")
+
+        # Load triplets and prefix IDs
+        triplets = load_triplets(db_path, dataset)
+        prefixed_triplets = [
+            (f"{dataset}:{a}", f"{dataset}:{p}", f"{dataset}:{n}")
+            for a, p, n in triplets
+        ]
+        all_triplets.extend(prefixed_triplets)
+        print(f"  {len(triplets)} triplet judgments")
+
+        # Load equality constraints and prefix IDs
+        equality = load_equality_constraints(db_path, dataset)
+        prefixed_equality = [
+            (f"{dataset}:{a}", f"{dataset}:{oa}", f"{dataset}:{ob}")
+            for a, oa, ob in equality
+        ]
+        all_equality.extend(prefixed_equality)
+        print(f"  {len(equality)} equality constraints")
+
+        # Load embeddings and prefix IDs
+        embeddings = load_embeddings(dataset)
+        for artist_id, emb in embeddings.items():
+            all_embeddings[f"{dataset}:{artist_id}"] = emb
+        print(f"  {len(embeddings)} embeddings")
+
+    return all_triplets, all_equality, all_embeddings
+
+
 @click.command()
-@click.argument("dataset")
+@click.argument("datasets", nargs=-1, required=True)
 @click.option("--epochs", default=100, help="Number of training epochs")
 @click.option("--lr", default=0.01, help="Learning rate")
 @click.option("--margin", default=0.2, help="Triplet margin")
@@ -241,7 +288,7 @@ def evaluate(
 @click.option("--equality-weight", default=0.5, help="Weight for equality constraints")
 @click.option("--output", "-o", default=None, help="Output path for weights")
 def main(
-    dataset: str,
+    datasets: tuple[str, ...],
     epochs: int,
     lr: float,
     margin: float,
@@ -249,26 +296,39 @@ def main(
     equality_weight: float,
     output: str | None,
 ):
-    """Train similarity weights from triplet judgments."""
+    """Train similarity weights from triplet judgments.
+
+    Accepts one or more dataset names. When multiple datasets are provided,
+    triplets from each are combined for training while keeping embeddings
+    scoped to prevent cross-dataset comparisons.
+    """
     db_path = Path("data/triplets.db")
     if not db_path.exists():
         raise FileNotFoundError(f"Triplets database not found: {db_path}")
 
-    # Load data
-    print(f"Loading triplets for dataset '{dataset}'...")
-    triplets = load_triplets(db_path, dataset)
-    print(f"Found {len(triplets)} triplet judgments")
+    # Load data from all datasets
+    if len(datasets) == 1:
+        # Single dataset - use original logic (no prefixing)
+        dataset = datasets[0]
+        print(f"Loading triplets for dataset '{dataset}'...")
+        triplets = load_triplets(db_path, dataset)
+        print(f"Found {len(triplets)} triplet judgments")
 
-    equality_constraints = load_equality_constraints(db_path, dataset)
-    print(f"Found {len(equality_constraints)} equality constraints (too_similar/anchor_outlier skips)")
+        equality_constraints = load_equality_constraints(db_path, dataset)
+        print(f"Found {len(equality_constraints)} equality constraints (too_similar/anchor_outlier skips)")
+
+        print("Loading embeddings...")
+        embeddings = load_embeddings(dataset)
+        print(f"Loaded {len(embeddings)} embeddings")
+    else:
+        # Multiple datasets - combine with prefixed IDs
+        print(f"Loading {len(datasets)} datasets: {', '.join(datasets)}")
+        triplets, equality_constraints, embeddings = load_multi_dataset(db_path, list(datasets))
+        print(f"\nCombined: {len(triplets)} triplets, {len(equality_constraints)} equality constraints, {len(embeddings)} embeddings")
 
     if len(triplets) == 0:
         print("No triplets found. Collect some training data first!")
         return
-
-    print("Loading embeddings...")
-    embeddings = load_embeddings(dataset)
-    print(f"Loaded {len(embeddings)} embeddings")
 
     # Create datasets and dataloaders
     train_dataset = TripletDataset(triplets, embeddings)
@@ -306,7 +366,12 @@ def main(
     print(f"Improvement: {trained_acc - baseline_acc:+.1%}")
 
     # Save weights in safetensors format
-    output_path = Path(output) if output else Path(f"data/{dataset}/similarity_weights.safetensors")
+    if output:
+        output_path = Path(output)
+    elif len(datasets) == 1:
+        output_path = Path(f"data/{datasets[0]}/similarity_weights.safetensors")
+    else:
+        output_path = Path("similarity_weights.safetensors")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     weights = torch.nn.functional.softplus(model.weights).detach().numpy()
@@ -319,6 +384,7 @@ def main(
         "baseline_accuracy": str(baseline_acc),
         "epochs": str(epochs),
         "num_triplets": str(len(triplets)),
+        "datasets": ",".join(datasets),
     }
     save_file(tensors, output_path, metadata=metadata)
     print(f"\nSaved weights to {output_path}")
