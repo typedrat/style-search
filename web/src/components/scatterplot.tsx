@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import * as d3 from 'd3'
-import type { Artist } from './api'
+import type { Artist } from '@/api'
 
 interface Node extends d3.SimulationNodeDatum {
   id: string
@@ -22,7 +22,7 @@ interface Props {
   similarArtists?: Artist[]
 }
 
-export default function Scatterplot({
+export function Scatterplot({
   artists,
   coords,
   distances = {},
