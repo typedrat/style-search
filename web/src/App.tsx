@@ -42,6 +42,7 @@ function App() {
     setError(null)
     setSelectedArtist(null)
     setSimilarArtists([])
+    setDistances({})
 
     Promise.all([getArtists(currentDataset), getUmapProjection(currentDataset)])
       .then(([a, c]) => {
