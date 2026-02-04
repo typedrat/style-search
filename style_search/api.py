@@ -8,10 +8,12 @@ from pathlib import Path
 import click
 import chromadb
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
+from style_search import similarity
 
 app = FastAPI(title="Style Search API")
 
@@ -113,6 +115,32 @@ class TripletResponse(BaseModel):
     choice: str | None
     skip_reason: str | None
     timestamp: int
+
+
+class SuggestedTripletResponse(BaseModel):
+    anchor: str
+    option_a: str
+    option_b: str
+    uncertainty_score: float
+    diversity_score: float
+
+
+class ModelStatusResponse(BaseModel):
+    loaded: bool
+    dim: int | None
+    num_triplets: int
+    train_accuracy: float | None
+    weights_path: str | None
+    weights_exist: bool
+
+
+class RetrainResponse(BaseModel):
+    train_accuracy: float | None = None
+    baseline_accuracy: float | None = None
+    improvement: float | None = None
+    num_triplets: int
+    dim: int | None = None
+    error: str | None = None
 
 
 def get_collection(dataset: str) -> chromadb.Collection:
@@ -276,7 +304,7 @@ def get_artist_image(dataset: str, artist_id: str):
 
 
 @app.post("/api/triplets")
-def create_triplet(triplet: TripletCreate) -> TripletResponse:
+def create_triplet(triplet: TripletCreate, background_tasks: BackgroundTasks) -> TripletResponse:
     """Store a new triplet judgment."""
     with get_db() as conn:
         cursor = conn.execute(
@@ -287,16 +315,46 @@ def create_triplet(triplet: TripletCreate) -> TripletResponse:
             (triplet.dataset, triplet.anchor, triplet.option_a, triplet.option_b, triplet.choice, triplet.skip_reason, triplet.timestamp),
         )
         conn.commit()
-        return TripletResponse(
-            id=cursor.lastrowid,
-            dataset=triplet.dataset,
-            anchor=triplet.anchor,
-            option_a=triplet.option_a,
-            option_b=triplet.option_b,
-            choice=triplet.choice,
-            skip_reason=triplet.skip_reason,
-            timestamp=triplet.timestamp,
-        )
+        triplet_id = cursor.lastrowid
+
+        # Count triplets for this dataset to check if we need a full retrain
+        count_row = conn.execute(
+            "SELECT COUNT(*) FROM triplets WHERE dataset = ? AND choice IS NOT NULL",
+            (triplet.dataset,),
+        ).fetchone()
+        triplet_count = count_row[0] if count_row else 0
+
+    # Trigger warm update if this is a real choice (not a skip)
+    if triplet.choice is not None:
+        # Convert choice to (anchor, positive, negative) format
+        if triplet.choice == "A":
+            positive, negative = triplet.option_a, triplet.option_b
+        else:
+            positive, negative = triplet.option_b, triplet.option_a
+
+        try:
+            similarity.warm_update(
+                triplet.dataset, (triplet.anchor, positive, negative)
+            )
+
+            # Trigger full retrain every FULL_RETRAIN_INTERVAL triplets
+            if triplet_count > 0 and triplet_count % similarity.FULL_RETRAIN_INTERVAL == 0:
+                background_tasks.add_task(similarity.full_retrain, triplet.dataset)
+                print(f"Queued background retrain for {triplet.dataset} (triplet #{triplet_count})")
+        except Exception as e:
+            # Log but don't fail the request
+            print(f"Warm update failed: {e}")
+
+    return TripletResponse(
+        id=triplet_id,
+        dataset=triplet.dataset,
+        anchor=triplet.anchor,
+        option_a=triplet.option_a,
+        option_b=triplet.option_b,
+        choice=triplet.choice,
+        skip_reason=triplet.skip_reason,
+        timestamp=triplet.timestamp,
+    )
 
 
 @app.get("/api/triplets")
@@ -367,6 +425,59 @@ def delete_triplet(triplet_id: int):
         if cursor.rowcount == 0:
             raise HTTPException(404, f"Triplet {triplet_id} not found")
         return {"deleted": triplet_id}
+
+
+@app.get("/api/datasets/{dataset}/suggest-triplet")
+def suggest_triplet(dataset: str) -> SuggestedTripletResponse:
+    """Suggest a triplet using active learning (uncertainty + diversity sampling)."""
+    # Verify dataset exists
+    get_collection(dataset)
+
+    try:
+        suggested = similarity.suggest_triplet(dataset)
+        return SuggestedTripletResponse(
+            anchor=suggested.anchor,
+            option_a=suggested.option_a,
+            option_b=suggested.option_b,
+            uncertainty_score=suggested.uncertainty_score,
+            diversity_score=suggested.diversity_score,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Failed to suggest triplet: {e}")
+
+
+@app.post("/api/datasets/{dataset}/retrain")
+def retrain_model(dataset: str, background_tasks: BackgroundTasks) -> RetrainResponse:
+    """Trigger a full model retrain."""
+    # Verify dataset exists
+    get_collection(dataset)
+
+    try:
+        # Run synchronously for now to return metrics
+        result = similarity.full_retrain(dataset)
+        return RetrainResponse(**result)
+    except Exception as e:
+        raise HTTPException(500, f"Failed to retrain model: {e}")
+
+
+@app.get("/api/datasets/{dataset}/model-status")
+def get_model_status(dataset: str) -> ModelStatusResponse:
+    """Get the status of the similarity model for a dataset."""
+    # Verify dataset exists
+    get_collection(dataset)
+
+    try:
+        status = similarity.get_model_status(dataset)
+        return ModelStatusResponse(
+            loaded=status.loaded,
+            dim=status.dim,
+            num_triplets=status.num_triplets,
+            train_accuracy=status.train_accuracy,
+            weights_path=status.weights_path,
+            weights_exist=status.weights_exist,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Failed to get model status: {e}")
 
 
 @click.command()

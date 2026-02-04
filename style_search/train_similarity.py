@@ -10,6 +10,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from safetensors.torch import load_file, save_file
 from torch.utils.data import DataLoader, Dataset
 
 
@@ -304,20 +305,22 @@ def main(
     print(f"\nTrained accuracy: {trained_acc:.1%}")
     print(f"Improvement: {trained_acc - baseline_acc:+.1%}")
 
-    # Save weights
-    output_path = Path(output) if output else Path(f"data/{dataset}/similarity_weights.pt")
+    # Save weights in safetensors format
+    output_path = Path(output) if output else Path(f"data/{dataset}/similarity_weights.safetensors")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     weights = torch.nn.functional.softplus(model.weights).detach().numpy()
-    torch.save({
-        "weights": model.state_dict(),
-        "weights_numpy": weights,
-        "dim": dim,
-        "train_accuracy": trained_acc,
-        "baseline_accuracy": baseline_acc,
-        "epochs": epochs,
-        "num_triplets": len(triplets),
-    }, output_path)
+
+    # Save with safetensors (metadata must be strings)
+    tensors = {"weights": model.weights.data}
+    metadata = {
+        "dim": str(dim),
+        "train_accuracy": str(trained_acc),
+        "baseline_accuracy": str(baseline_acc),
+        "epochs": str(epochs),
+        "num_triplets": str(len(triplets)),
+    }
+    save_file(tensors, output_path, metadata=metadata)
     print(f"\nSaved weights to {output_path}")
 
     # Print top weighted dimensions

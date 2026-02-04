@@ -88,7 +88,8 @@ function DatasetView() {
       .catch((e) => console.error(e))
   }, [dataset, selectedArtist])
 
-  const handleDatasetChange = (newDataset: string) => {
+  const handleDatasetChange = (newDataset: string | null) => {
+    if (!newDataset) return
     if (artistId) {
       navigate({ to: '/$dataset/$artistId', params: { dataset: newDataset, artistId } })
     } else {

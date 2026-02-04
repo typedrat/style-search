@@ -107,3 +107,55 @@ export async function updateTriplet(
 export async function deleteTriplet(id: number): Promise<void> {
   await fetch(`/api/triplets/${id}`, { method: 'DELETE' })
 }
+
+export interface SuggestedTriplet {
+  anchor: string
+  option_a: string
+  option_b: string
+  uncertainty_score: number
+  diversity_score: number
+}
+
+export async function suggestTriplet(dataset: string): Promise<SuggestedTriplet> {
+  const res = await fetch(`/api/datasets/${encodeURIComponent(dataset)}/suggest-triplet`)
+  if (!res.ok) {
+    throw new Error(`Failed to suggest triplet: ${res.statusText}`)
+  }
+  return res.json()
+}
+
+export interface ModelStatus {
+  loaded: boolean
+  dim: number | null
+  num_triplets: number
+  train_accuracy: number | null
+  weights_path: string | null
+  weights_exist: boolean
+}
+
+export async function getModelStatus(dataset: string): Promise<ModelStatus> {
+  const res = await fetch(`/api/datasets/${encodeURIComponent(dataset)}/model-status`)
+  if (!res.ok) {
+    throw new Error(`Failed to get model status: ${res.statusText}`)
+  }
+  return res.json()
+}
+
+export interface RetrainResult {
+  train_accuracy?: number
+  baseline_accuracy?: number
+  improvement?: number
+  num_triplets: number
+  dim?: number
+  error?: string
+}
+
+export async function retrainModel(dataset: string): Promise<RetrainResult> {
+  const res = await fetch(`/api/datasets/${encodeURIComponent(dataset)}/retrain`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    throw new Error(`Failed to retrain model: ${res.statusText}`)
+  }
+  return res.json()
+}
