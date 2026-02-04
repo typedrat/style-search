@@ -8,10 +8,31 @@ __pycache__/
 .venv/
 venv/
 
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
 # IDE
 .idea/
-.vscode/
+.vscode/*
+!.vscode/extensions.json
 *.swp
+*.sw?
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
 
 # Data
 data/
