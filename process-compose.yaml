@@ -1,0 +1,19 @@
+version: "0.5"
+
+processes:
+  api:
+    command: uv run style-api --reload
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 8000
+        path: /api/datasets
+      initial_delay_seconds: 2
+      period_seconds: 5
+
+  web:
+    command: bun dev
+    working_dir: ./web
+    depends_on:
+      api:
+        condition: process_healthy
