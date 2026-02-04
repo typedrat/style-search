@@ -181,6 +181,13 @@ export function Scatterplot({
       )
     }
 
+    // Get theme colors from CSS variables
+    const style = getComputedStyle(document.documentElement)
+    const colorSelected = style.getPropertyValue('--catppuccin-color-peach').trim()
+    const colorSimilar = style.getPropertyValue('--catppuccin-color-blue').trim()
+    const colorDefault = style.getPropertyValue('--catppuccin-color-overlay0').trim()
+    const colorStroke = style.getPropertyValue('--catppuccin-color-text').trim()
+
     // Draw nodes
     const nodeElements = g
       .selectAll<SVGCircleElement, Node>('circle')
@@ -191,12 +198,12 @@ export function Scatterplot({
       )
       .attr('fill', (d) =>
         d.id === selectedArtist?.id
-          ? '#f59e0b'
+          ? colorSelected
           : similarIds.has(d.id)
-            ? '#3b82f6'
-            : '#6b7280'
+            ? colorSimilar
+            : colorDefault
       )
-      .attr('stroke', (d) => (d.id === selectedArtist?.id ? '#fff' : 'none'))
+      .attr('stroke', (d) => (d.id === selectedArtist?.id ? colorStroke : 'none'))
       .attr('stroke-width', 2)
       .attr('cursor', 'pointer')
       .on('click', (_, d) => {
@@ -204,13 +211,15 @@ export function Scatterplot({
       })
 
     // Tooltip
+    const tooltipBg = style.getPropertyValue('--catppuccin-color-surface0').trim()
+    const tooltipFg = style.getPropertyValue('--catppuccin-color-text').trim()
     const tooltip = d3
       .select('body')
       .append('div')
       .attr('class', 'tooltip')
       .style('position', 'absolute')
-      .style('background', 'rgba(0,0,0,0.8)')
-      .style('color', 'white')
+      .style('background', tooltipBg)
+      .style('color', tooltipFg)
       .style('padding', '8px 12px')
       .style('border-radius', '4px')
       .style('font-size', '14px')
