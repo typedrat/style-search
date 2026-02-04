@@ -107,8 +107,8 @@ export function Scatterplot({
 
     svg.call(zoom)
 
-    // Reset zoom to fit all nodes initially
-    svg.call(zoom.transform, d3.zoomIdentity)
+    // Reset zoom to fit all nodes
+    svg.transition().duration(300).call(zoom.transform, d3.zoomIdentity)
 
     // Force simulation
     const simulation = d3
@@ -168,9 +168,6 @@ export function Scatterplot({
       // Collision spreads nodes apart
       simulation.force('collision', d3.forceCollide().radius(10).strength(1))
       simulation.force('charge', d3.forceManyBody().strength(-3))
-
-      // Reset zoom
-      svg.call(zoom.transform, d3.zoomIdentity)
     } else {
       // No selection: drift back to UMAP positions
       simulation.force('charge', d3.forceManyBody().strength(-2))
