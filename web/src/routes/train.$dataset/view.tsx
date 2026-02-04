@@ -40,7 +40,7 @@ function ViewTripletsPage() {
   useEffect(() => {
     setLoading(true)
     getTriplets(dataset)
-      .then(setTriplets)
+      .then((t) => setTriplets([...t].reverse()))
       .finally(() => setLoading(false))
   }, [dataset])
 
