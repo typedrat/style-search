@@ -59,3 +59,7 @@ export async function getDistancesFrom(
   const res = await fetch(`/api/datasets/${dataset}/distances/${encodeURIComponent(artistId)}`)
   return res.json()
 }
+
+export function getArtistImageUrl(dataset: string, artistId: string): string {
+  return `/api/datasets/${encodeURIComponent(dataset)}/images/${encodeURIComponent(artistId)}`
+}

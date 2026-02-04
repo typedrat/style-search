@@ -8,6 +8,7 @@ import chromadb
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="Style Search API")
@@ -180,6 +181,27 @@ def get_umap_projection(dataset: str, n_neighbors: int = 15, min_dist: float = 0
         id_: coord.tolist()
         for id_, coord in zip(ids, coords)
     }
+
+
+@app.get("/api/datasets/{dataset}/images/{artist_id:path}")
+def get_artist_image(dataset: str, artist_id: str):
+    """Serve an artist's image file."""
+    collection = get_collection(dataset)
+    result = collection.get(ids=[artist_id], include=["uris"])
+
+    if not result["ids"]:
+        raise HTTPException(404, f"Artist '{artist_id}' not found")
+
+    uri = result["uris"][0] if result["uris"] else None
+    if not uri:
+        raise HTTPException(404, f"No image for artist '{artist_id}'")
+
+    # URI should be a file path
+    image_path = Path(uri)
+    if not image_path.exists():
+        raise HTTPException(404, f"Image file not found: {uri}")
+
+    return FileResponse(image_path)
 
 
 @click.command()

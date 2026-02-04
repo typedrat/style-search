@@ -111,8 +111,9 @@ function App() {
           )}
         </main>
 
-        {selectedArtist && (
+        {selectedArtist && currentDataset && (
           <DetailSidebar
+            dataset={currentDataset}
             artist={selectedArtist}
             similarArtists={similarArtists}
             onSelectArtist={setSelectedArtist}

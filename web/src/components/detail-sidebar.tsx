@@ -1,8 +1,14 @@
 import { useMemo } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import type { Artist } from '@/api'
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from '@/components/ui/hover-card'
+import { getArtistImageUrl, type Artist } from '@/api'
 
 interface DetailSidebarProps {
+  dataset: string
   artist: Artist
   similarArtists: Artist[]
   onSelectArtist: (artist: Artist) => void
@@ -32,6 +38,7 @@ function SimilarityScore({ distance, min, max }: { distance: number; min: number
 }
 
 export function DetailSidebar({
+  dataset,
   artist,
   similarArtists,
   onSelectArtist,
@@ -53,13 +60,11 @@ export function DetailSidebar({
           <CardTitle className="text-base">{artist.id}</CardTitle>
         </CardHeader>
         <CardContent>
-          {artist.uri && (
-            <img
-              src={artist.uri}
-              alt={artist.id}
-              className="w-full rounded-md"
-            />
-          )}
+          <img
+            src={getArtistImageUrl(dataset, artist.id)}
+            alt={artist.id}
+            className="w-full rounded-md"
+          />
         </CardContent>
       </Card>
 
@@ -74,13 +79,22 @@ export function DetailSidebar({
               onClick={() => onSelectArtist(a)}
               className="w-full flex items-center gap-3 p-2 rounded-md hover:bg-accent transition-colors"
             >
-              {a.uri && (
-                <img
-                  src={a.uri}
-                  alt={a.id}
-                  className="w-10 h-10 object-cover rounded"
-                />
-              )}
+              <HoverCard openDelay={200} closeDelay={0}>
+                <HoverCardTrigger asChild>
+                  <img
+                    src={getArtistImageUrl(dataset, a.id)}
+                    alt={a.id}
+                    className="w-12 h-12 object-cover rounded"
+                  />
+                </HoverCardTrigger>
+                <HoverCardContent side="left" className="w-64 p-0">
+                  <img
+                    src={getArtistImageUrl(dataset, a.id)}
+                    alt={a.id}
+                    className="w-full rounded-md"
+                  />
+                </HoverCardContent>
+              </HoverCard>
               <span className="flex-1 text-sm text-left truncate">
                 {a.id}
               </span>
