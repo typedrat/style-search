@@ -12,6 +12,8 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as DatasetRouteImport } from './routes/$dataset'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DatasetArtistIdRouteImport } from './routes/$dataset/$artistId'
+import { Route as TrainDatasetIndexRouteImport } from './routes/train.$dataset/index'
+import { Route as TrainDatasetViewRouteImport } from './routes/train.$dataset/view'
 
 const DatasetRoute = DatasetRouteImport.update({
   id: '/$dataset',
@@ -28,34 +30,68 @@ const DatasetArtistIdRoute = DatasetArtistIdRouteImport.update({
   path: '/$artistId',
   getParentRoute: () => DatasetRoute,
 } as any)
+const TrainDatasetIndexRoute = TrainDatasetIndexRouteImport.update({
+  id: '/train/$dataset/',
+  path: '/train/$dataset/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TrainDatasetViewRoute = TrainDatasetViewRouteImport.update({
+  id: '/train/$dataset/view',
+  path: '/train/$dataset/view',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$dataset': typeof DatasetRouteWithChildren
   '/$dataset/$artistId': typeof DatasetArtistIdRoute
+  '/train/$dataset/view': typeof TrainDatasetViewRoute
+  '/train/$dataset/': typeof TrainDatasetIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$dataset': typeof DatasetRouteWithChildren
   '/$dataset/$artistId': typeof DatasetArtistIdRoute
+  '/train/$dataset/view': typeof TrainDatasetViewRoute
+  '/train/$dataset': typeof TrainDatasetIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/$dataset': typeof DatasetRouteWithChildren
   '/$dataset/$artistId': typeof DatasetArtistIdRoute
+  '/train/$dataset/view': typeof TrainDatasetViewRoute
+  '/train/$dataset/': typeof TrainDatasetIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/$dataset' | '/$dataset/$artistId'
+  fullPaths:
+    | '/'
+    | '/$dataset'
+    | '/$dataset/$artistId'
+    | '/train/$dataset/view'
+    | '/train/$dataset/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/$dataset' | '/$dataset/$artistId'
-  id: '__root__' | '/' | '/$dataset' | '/$dataset/$artistId'
+  to:
+    | '/'
+    | '/$dataset'
+    | '/$dataset/$artistId'
+    | '/train/$dataset/view'
+    | '/train/$dataset'
+  id:
+    | '__root__'
+    | '/'
+    | '/$dataset'
+    | '/$dataset/$artistId'
+    | '/train/$dataset/view'
+    | '/train/$dataset/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DatasetRoute: typeof DatasetRouteWithChildren
+  TrainDatasetViewRoute: typeof TrainDatasetViewRoute
+  TrainDatasetIndexRoute: typeof TrainDatasetIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -81,6 +117,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DatasetArtistIdRouteImport
       parentRoute: typeof DatasetRoute
     }
+    '/train/$dataset/': {
+      id: '/train/$dataset/'
+      path: '/train/$dataset'
+      fullPath: '/train/$dataset/'
+      preLoaderRoute: typeof TrainDatasetIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/train/$dataset/view': {
+      id: '/train/$dataset/view'
+      path: '/train/$dataset/view'
+      fullPath: '/train/$dataset/view'
+      preLoaderRoute: typeof TrainDatasetViewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -98,6 +148,8 @@ const DatasetRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DatasetRoute: DatasetRouteWithChildren,
+  TrainDatasetViewRoute: TrainDatasetViewRoute,
+  TrainDatasetIndexRoute: TrainDatasetIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

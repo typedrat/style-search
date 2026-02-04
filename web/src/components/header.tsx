@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router'
 import {
   Select,
   SelectContent,
@@ -5,6 +6,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Button } from '@/components/ui/button'
 import { ThemeSwitcher } from '@/components/theme-switcher'
 
 interface HeaderProps {
@@ -39,6 +41,13 @@ export function Header({
           ))}
         </SelectContent>
       </Select>
+      {currentDataset && (
+        <Link to="/train/$dataset" params={{ dataset: currentDataset }}>
+          <Button variant="outline" size="sm">
+            Train
+          </Button>
+        </Link>
+      )}
       <div className="ml-auto">
         <ThemeSwitcher />
       </div>

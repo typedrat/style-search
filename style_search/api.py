@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """FastAPI backend for style-search visualization."""
 
+import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 import click
@@ -12,6 +14,54 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="Style Search API")
+
+# SQLite database for triplets
+TRIPLETS_DB = Path("data/triplets.db")
+
+
+@contextmanager
+def get_db():
+    """Get a database connection."""
+    TRIPLETS_DB.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(TRIPLETS_DB)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def init_db():
+    """Initialize the triplets database."""
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS triplets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dataset TEXT NOT NULL,
+                anchor TEXT NOT NULL,
+                option_a TEXT NOT NULL,
+                option_b TEXT NOT NULL,
+                choice TEXT,  -- 'A', 'B', or NULL for skip
+                skip_reason TEXT,  -- 'too_similar', 'anchor_outlier', 'unknown', or NULL
+                timestamp INTEGER NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_triplets_dataset ON triplets(dataset)
+        """)
+        # Migration: add skip_reason column if it doesn't exist
+        cursor = conn.execute("PRAGMA table_info(triplets)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "skip_reason" not in columns:
+            conn.execute("ALTER TABLE triplets ADD COLUMN skip_reason TEXT")
+            # Migrate legacy skips to 'unknown'
+            conn.execute("UPDATE triplets SET skip_reason = 'unknown' WHERE choice IS NULL AND skip_reason IS NULL")
+        conn.commit()
+
+
+# Initialize database on startup
+init_db()
 
 app.add_middleware(
     CORSMiddleware,
@@ -42,6 +92,27 @@ class CollectionInfo(BaseModel):
     name: str
     count: int
     metadata: dict
+
+
+class TripletCreate(BaseModel):
+    dataset: str
+    anchor: str
+    option_a: str
+    option_b: str
+    choice: str | None  # 'A', 'B', or None for skip
+    skip_reason: str | None = None  # 'too_similar', 'anchor_outlier', 'unknown'
+    timestamp: int
+
+
+class TripletResponse(BaseModel):
+    id: int
+    dataset: str
+    anchor: str
+    option_a: str
+    option_b: str
+    choice: str | None
+    skip_reason: str | None
+    timestamp: int
 
 
 def get_collection(dataset: str) -> chromadb.Collection:
@@ -202,6 +273,100 @@ def get_artist_image(dataset: str, artist_id: str):
         raise HTTPException(404, f"Image file not found: {uri}")
 
     return FileResponse(image_path)
+
+
+@app.post("/api/triplets")
+def create_triplet(triplet: TripletCreate) -> TripletResponse:
+    """Store a new triplet judgment."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO triplets (dataset, anchor, option_a, option_b, choice, skip_reason, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (triplet.dataset, triplet.anchor, triplet.option_a, triplet.option_b, triplet.choice, triplet.skip_reason, triplet.timestamp),
+        )
+        conn.commit()
+        return TripletResponse(
+            id=cursor.lastrowid,
+            dataset=triplet.dataset,
+            anchor=triplet.anchor,
+            option_a=triplet.option_a,
+            option_b=triplet.option_b,
+            choice=triplet.choice,
+            skip_reason=triplet.skip_reason,
+            timestamp=triplet.timestamp,
+        )
+
+
+@app.get("/api/triplets")
+def get_triplets(dataset: str | None = None) -> list[TripletResponse]:
+    """Get all triplets, optionally filtered by dataset."""
+    with get_db() as conn:
+        if dataset:
+            rows = conn.execute(
+                "SELECT * FROM triplets WHERE dataset = ? ORDER BY id",
+                (dataset,),
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM triplets ORDER BY id").fetchall()
+        return [
+            TripletResponse(
+                id=row["id"],
+                dataset=row["dataset"],
+                anchor=row["anchor"],
+                option_a=row["option_a"],
+                option_b=row["option_b"],
+                choice=row["choice"],
+                skip_reason=row["skip_reason"],
+                timestamp=row["timestamp"],
+            )
+            for row in rows
+        ]
+
+
+class TripletUpdate(BaseModel):
+    choice: str | None = None  # 'A', 'B', or None for skip
+    skip_reason: str | None = None  # 'too_similar', 'anchor_outlier', 'unknown'
+
+
+@app.patch("/api/triplets/{triplet_id}")
+def update_triplet(triplet_id: int, update: TripletUpdate) -> TripletResponse:
+    """Update a triplet's choice and/or skip_reason."""
+    with get_db() as conn:
+        # Check if triplet exists
+        row = conn.execute("SELECT * FROM triplets WHERE id = ?", (triplet_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, f"Triplet {triplet_id} not found")
+
+        conn.execute(
+            "UPDATE triplets SET choice = ?, skip_reason = ? WHERE id = ?",
+            (update.choice, update.skip_reason, triplet_id),
+        )
+        conn.commit()
+
+        row = conn.execute("SELECT * FROM triplets WHERE id = ?", (triplet_id,)).fetchone()
+        return TripletResponse(
+            id=row["id"],
+            dataset=row["dataset"],
+            anchor=row["anchor"],
+            option_a=row["option_a"],
+            option_b=row["option_b"],
+            choice=row["choice"],
+            skip_reason=row["skip_reason"],
+            timestamp=row["timestamp"],
+        )
+
+
+@app.delete("/api/triplets/{triplet_id}")
+def delete_triplet(triplet_id: int):
+    """Delete a triplet."""
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM triplets WHERE id = ?", (triplet_id,))
+        conn.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(404, f"Triplet {triplet_id} not found")
+        return {"deleted": triplet_id}
 
 
 @click.command()

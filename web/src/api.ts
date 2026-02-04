@@ -63,3 +63,47 @@ export async function getDistancesFrom(
 export function getArtistImageUrl(dataset: string, artistId: string): string {
   return `/api/datasets/${encodeURIComponent(dataset)}/images/${encodeURIComponent(artistId)}`
 }
+
+export type SkipReason = 'too_similar' | 'anchor_outlier' | 'unknown'
+
+export interface Triplet {
+  id?: number
+  dataset: string
+  anchor: string
+  option_a: string
+  option_b: string
+  choice: 'A' | 'B' | null  // null = skipped
+  skip_reason: SkipReason | null
+  timestamp: number
+}
+
+export async function createTriplet(triplet: Omit<Triplet, 'id'>): Promise<Triplet> {
+  const res = await fetch('/api/triplets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(triplet),
+  })
+  return res.json()
+}
+
+export async function getTriplets(dataset?: string): Promise<Triplet[]> {
+  const url = dataset ? `/api/triplets?dataset=${encodeURIComponent(dataset)}` : '/api/triplets'
+  const res = await fetch(url)
+  return res.json()
+}
+
+export async function updateTriplet(
+  id: number,
+  update: { choice: 'A' | 'B' | null; skip_reason: SkipReason | null }
+): Promise<Triplet> {
+  const res = await fetch(`/api/triplets/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(update),
+  })
+  return res.json()
+}
+
+export async function deleteTriplet(id: number): Promise<void> {
+  await fetch(`/api/triplets/${id}`, { method: 'DELETE' })
+}
