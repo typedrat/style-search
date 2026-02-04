@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
+import { createFileRoute, useNavigate, Outlet, useParams } from '@tanstack/react-router'
 import {
   type Artist,
   findSimilar,
@@ -6,81 +7,108 @@ import {
   getDistancesFrom,
   getUmapProjection,
   listDatasets,
-} from './api'
+} from '@/api'
 import { Header } from '@/components/header'
 import { SearchSidebar } from '@/components/search-sidebar'
 import { DetailSidebar } from '@/components/detail-sidebar'
 import { Scatterplot } from '@/components/scatterplot'
 
-function App() {
+export const Route = createFileRoute('/$dataset')({
+  component: DatasetView,
+})
+
+function DatasetView() {
+  const { dataset } = Route.useParams()
+  const params = useParams({ strict: false })
+  const navigate = useNavigate()
+
+  const artistId = (params as { artistId?: string }).artistId ?? null
+
   const [datasets, setDatasets] = useState<string[]>([])
-  const [currentDataset, setCurrentDataset] = useState<string | null>(null)
   const [artists, setArtists] = useState<Artist[]>([])
   const [coords, setCoords] = useState<Record<string, [number, number]>>({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const [selectedArtist, setSelectedArtist] = useState<Artist | null>(null)
   const [similarArtists, setSimilarArtists] = useState<Artist[]>([])
   const [distances, setDistances] = useState<Record<string, number>>({})
+
+  // Derive selected artist from URL param and loaded artists
+  const selectedArtist = useMemo(
+    () => artists.find((a) => a.id === artistId) ?? null,
+    [artists, artistId]
+  )
 
   // Load datasets on mount
   useEffect(() => {
     listDatasets()
-      .then((ds) => {
-        setDatasets(ds)
-        if (ds.length > 0) setCurrentDataset(ds[0])
-      })
+      .then(setDatasets)
       .catch((e) => setError(e.message))
   }, [])
 
   // Load artists and coords when dataset changes
   useEffect(() => {
-    if (!currentDataset) return
+    if (!dataset) return
 
     setLoading(true)
     setError(null)
     setSimilarArtists([])
     setDistances({})
 
-    Promise.all([getArtists(currentDataset), getUmapProjection(currentDataset)])
+    Promise.all([getArtists(dataset), getUmapProjection(dataset)])
       .then(([a, c]) => {
         setArtists(a)
         setCoords(c)
-        // Keep selection if artist exists in new dataset, otherwise clear
-        if (selectedArtist && !a.some((artist) => artist.id === selectedArtist.id)) {
-          setSelectedArtist(null)
+        // Clear artist from URL if not in new dataset
+        if (artistId && !a.some((artist) => artist.id === artistId)) {
+          navigate({ to: '/$dataset', params: { dataset } })
         }
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [currentDataset])
+  }, [dataset, artistId, navigate])
 
   // Load similar artists and distances when selection changes
   useEffect(() => {
-    if (!currentDataset || !selectedArtist) {
+    if (!dataset || !selectedArtist) {
       setSimilarArtists([])
       setDistances({})
       return
     }
 
     Promise.all([
-      findSimilar(currentDataset, selectedArtist.id, 20),
-      getDistancesFrom(currentDataset, selectedArtist.id),
+      findSimilar(dataset, selectedArtist.id, 20),
+      getDistancesFrom(dataset, selectedArtist.id),
     ])
       .then(([similar, dist]) => {
         setSimilarArtists(similar)
         setDistances(dist)
       })
       .catch((e) => console.error(e))
-  }, [currentDataset, selectedArtist])
+  }, [dataset, selectedArtist])
+
+  const handleDatasetChange = (newDataset: string) => {
+    if (artistId) {
+      navigate({ to: '/$dataset/$artistId', params: { dataset: newDataset, artistId } })
+    } else {
+      navigate({ to: '/$dataset', params: { dataset: newDataset } })
+    }
+  }
+
+  const handleSelectArtist = (artist: Artist | null) => {
+    if (artist) {
+      navigate({ to: '/$dataset/$artistId', params: { dataset, artistId: artist.id } })
+    } else {
+      navigate({ to: '/$dataset', params: { dataset } })
+    }
+  }
 
   return (
     <div className="flex flex-col h-screen bg-background text-foreground">
       <Header
         datasets={datasets}
-        currentDataset={currentDataset}
-        onDatasetChange={setCurrentDataset}
+        currentDataset={dataset}
+        onDatasetChange={handleDatasetChange}
         loading={loading}
       />
 
@@ -92,10 +120,10 @@ function App() {
 
       <div className="flex flex-1 overflow-hidden">
         <SearchSidebar
-          dataset={currentDataset}
+          dataset={dataset}
           artists={artists}
           selectedArtist={selectedArtist}
-          onSelectArtist={setSelectedArtist}
+          onSelectArtist={handleSelectArtist}
         />
 
         <main className="flex-1 relative overflow-hidden">
@@ -105,28 +133,27 @@ function App() {
             </div>
           ) : (
             <Scatterplot
-              key={currentDataset}
+              key={dataset}
               artists={artists}
               coords={coords}
               selectedArtist={selectedArtist}
               similarArtists={similarArtists}
               distances={distances}
-              onSelectArtist={setSelectedArtist}
+              onSelectArtist={handleSelectArtist}
             />
           )}
         </main>
 
-        {selectedArtist && currentDataset && (
+        {selectedArtist && (
           <DetailSidebar
-            dataset={currentDataset}
+            dataset={dataset}
             artist={selectedArtist}
             similarArtists={similarArtists}
-            onSelectArtist={setSelectedArtist}
+            onSelectArtist={handleSelectArtist}
           />
         )}
       </div>
+      <Outlet />
     </div>
   )
 }
-
-export default App
