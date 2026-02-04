@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import type { Artist } from '@/api'
 
@@ -7,11 +8,44 @@ interface DetailSidebarProps {
   onSelectArtist: (artist: Artist) => void
 }
 
+function SimilarityScore({ distance, min, max }: { distance: number; min: number; max: number }) {
+  // Normalize distance to 0-1 range (0 = most similar, 1 = least similar)
+  const range = max - min
+  const normalized = range > 0 ? (distance - min) / range : 0
+
+  // Color classes based on similarity
+  // Most similar (low distance) = green, least similar (high distance) = red
+  let colorClass: string
+  if (normalized < 0.33) {
+    colorClass = 'text-ctp-green'
+  } else if (normalized < 0.66) {
+    colorClass = 'text-ctp-yellow'
+  } else {
+    colorClass = 'text-ctp-red'
+  }
+
+  return (
+    <span className={`text-xs font-mono ${colorClass}`}>
+      {distance.toFixed(3)}
+    </span>
+  )
+}
+
 export function DetailSidebar({
   artist,
   similarArtists,
   onSelectArtist,
 }: DetailSidebarProps) {
+  const { minDistance, maxDistance } = useMemo(() => {
+    const distances = similarArtists
+      .map((a) => a.distance)
+      .filter((d): d is number => d !== undefined)
+    return {
+      minDistance: Math.min(...distances),
+      maxDistance: Math.max(...distances),
+    }
+  }, [similarArtists])
+
   return (
     <aside className="w-80 border-l border-border bg-card overflow-y-auto">
       <Card className="border-0 rounded-none">
@@ -51,9 +85,11 @@ export function DetailSidebar({
                 {a.id}
               </span>
               {a.distance !== undefined && (
-                <span className="text-xs text-muted-foreground font-mono">
-                  {a.distance.toFixed(3)}
-                </span>
+                <SimilarityScore
+                  distance={a.distance}
+                  min={minDistance}
+                  max={maxDistance}
+                />
               )}
             </button>
           ))}
