@@ -52,7 +52,7 @@ export function Scatterplot({
     svg.selectAll('*').remove()
 
     const { width, height } = dimensions
-    const margin = 40
+    const margin = 60
     const centerX = width / 2
     const centerY = height / 2
 
@@ -71,19 +71,21 @@ export function Scatterplot({
         }
       })
 
-    // Scale coords to fit
+    // Scale coords to fit while preserving aspect ratio
     const xExtent = d3.extent(nodes, (d) => d.initialX) as [number, number]
     const yExtent = d3.extent(nodes, (d) => d.initialY) as [number, number]
 
-    const xScale = d3
-      .scaleLinear()
-      .domain(xExtent)
-      .range([margin, width - margin])
+    const dataWidth = xExtent[1] - xExtent[0]
+    const dataHeight = yExtent[1] - yExtent[0]
+    const viewWidth = width - margin * 2
+    const viewHeight = height - margin * 2
 
-    const yScale = d3
-      .scaleLinear()
-      .domain(yExtent)
-      .range([margin, height - margin])
+    const scale = Math.min(viewWidth / dataWidth, viewHeight / dataHeight)
+    const dataCenterX = (xExtent[0] + xExtent[1]) / 2
+    const dataCenterY = (yExtent[0] + yExtent[1]) / 2
+
+    const xScale = (x: number) => centerX + (x - dataCenterX) * scale
+    const yScale = (y: number) => centerY + (y - dataCenterY) * scale
 
     // Apply scaling to initial positions
     nodes.forEach((n) => {
@@ -104,6 +106,9 @@ export function Scatterplot({
       })
 
     svg.call(zoom)
+
+    // Reset zoom to fit all nodes initially
+    svg.call(zoom.transform, d3.zoomIdentity)
 
     // Force simulation
     const simulation = d3
