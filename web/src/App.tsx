@@ -89,6 +89,7 @@ function App() {
 
       <div className="flex flex-1 overflow-hidden">
         <SearchSidebar
+          dataset={currentDataset}
           artists={artists}
           selectedArtist={selectedArtist}
           onSelectArtist={setSelectedArtist}
