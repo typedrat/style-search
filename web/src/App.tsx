@@ -18,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { ThemeSwitcher } from '@/components/theme-switcher'
 
 function App() {
   const [datasets, setDatasets] = useState<string[]>([])
@@ -106,6 +107,9 @@ function App() {
             ))}
           </SelectContent>
         </Select>
+        <div className="ml-auto">
+          <ThemeSwitcher />
+        </div>
       </header>
 
       {error && (
