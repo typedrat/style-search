@@ -40,7 +40,6 @@ function App() {
 
     setLoading(true)
     setError(null)
-    setSelectedArtist(null)
     setSimilarArtists([])
     setDistances({})
 
@@ -48,6 +47,10 @@ function App() {
       .then(([a, c]) => {
         setArtists(a)
         setCoords(c)
+        // Keep selection if artist exists in new dataset, otherwise clear
+        if (selectedArtist && !a.some((artist) => artist.id === selectedArtist.id)) {
+          setSelectedArtist(null)
+        }
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
@@ -102,6 +105,7 @@ function App() {
             </div>
           ) : (
             <Scatterplot
+              key={currentDataset}
               artists={artists}
               coords={coords}
               selectedArtist={selectedArtist}
