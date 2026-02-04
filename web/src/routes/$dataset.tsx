@@ -12,6 +12,7 @@ import { Header } from '@/components/header'
 import { SearchSidebar } from '@/components/search-sidebar'
 import { DetailSidebar } from '@/components/detail-sidebar'
 import { Scatterplot } from '@/components/scatterplot'
+import { Spinner } from '@/components/ui/spinner'
 
 export const Route = createFileRoute('/$dataset')({
   component: DatasetView,
@@ -128,8 +129,8 @@ function DatasetView() {
 
         <main className="flex-1 relative overflow-hidden">
           {loading ? (
-            <div className="flex items-center justify-center h-full text-muted-foreground">
-              Loading UMAP projection...
+            <div className="flex items-center justify-center h-full">
+              <Spinner className="size-8 text-muted-foreground" />
             </div>
           ) : (
             <Scatterplot
