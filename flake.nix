@@ -56,6 +56,7 @@
               uv
               bun
               process-compose
+              sqlite
             ]
             ++ libs;
 
