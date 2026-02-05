@@ -7,6 +7,24 @@
 }:
 let
   cfg = config.services.style-search;
+  serviceCfg = config.systemd.services.style-search;
+
+  # Properties to pass through to systemd-run (exclude service-specific ones)
+  excludedProps = [ "Type" "ExecStart" "ExecReload" "ExecStop" "Restart" "RestartSec" ];
+  serviceConfigProps = lib.filterAttrs (k: v: !(builtins.elem k excludedProps)) serviceCfg.serviceConfig;
+
+  # Admin CLI wrapper that runs commands in the same systemd context as the service
+  adminScript = pkgs.writeShellScriptBin "style-search-admin" ''
+    exec systemd-run \
+      --pipe \
+      --quiet \
+      --wait \
+      --collect \
+      --service-type=exec \
+      ${lib.concatStringsSep " \\\n      " (lib.mapAttrsToList (k: v: "--property=${k}=${toString v}") serviceConfigProps)} \
+      ${lib.concatStringsSep " \\\n      " (lib.mapAttrsToList (k: v: "--property=Environment=${k}=${toString v}") serviceCfg.environment)} \
+      ${cfg.package}/bin/style-api "$@"
+  '';
 in
 {
   options.services.style-search = {
@@ -38,6 +56,8 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    environment.systemPackages = [ adminScript ];
+
     systemd.services.style-search = {
       description = "Style Search API Server";
       wantedBy = [ "multi-user.target" ];
