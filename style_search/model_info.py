@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 from safetensors import safe_open
 
-MODELS_DIR = Path("data/models")
+from style_search.config import MODELS_DIR
 
 
 def format_value(key: str, value) -> str:

@@ -16,8 +16,7 @@ import torch.optim as optim
 from safetensors.torch import save_file
 from torch.utils.data import DataLoader, Dataset
 
-# Models directory
-MODELS_DIR = Path("data/models")
+from style_search.config import MODELS_DIR, TRIPLETS_DB, dataset_chroma_path
 
 
 def _is_path(output: str) -> bool:
@@ -221,11 +220,11 @@ def load_equality_constraints(
 
 def load_embeddings(dataset: str) -> dict[str, np.ndarray]:
     """Load embeddings from ChromaDB."""
-    db_path = Path(f"data/{dataset}/chroma")
-    if not db_path.exists():
-        raise FileNotFoundError(f"Dataset not found: {db_path}")
+    chroma_path = dataset_chroma_path(dataset)
+    if not chroma_path.exists():
+        raise FileNotFoundError(f"Dataset not found: {chroma_path}")
 
-    client = chromadb.PersistentClient(path=str(db_path))
+    client = chromadb.PersistentClient(path=str(chroma_path))
     collection = client.get_collection(dataset)
     results = collection.get(include=["embeddings"])
 
@@ -466,7 +465,7 @@ def main(
     triplets from each are combined for training while keeping embeddings
     scoped to prevent cross-dataset comparisons.
     """
-    db_path = Path("data/triplets.db")
+    db_path = TRIPLETS_DB
     if not db_path.exists():
         raise FileNotFoundError(f"Triplets database not found: {db_path}")
 

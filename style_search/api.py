@@ -14,18 +14,17 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from style_search import similarity
+from style_search.config import TRIPLETS_DB, dataset_chroma_path
 
 app = FastAPI(title="Style Search API")
-
-# SQLite database for triplets
-TRIPLETS_DB = Path("data/triplets.db")
 
 
 @contextmanager
 def get_db():
-    """Get a database connection."""
+    """Get a database connection with WAL mode for better concurrency."""
     TRIPLETS_DB.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(TRIPLETS_DB)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -176,10 +175,10 @@ class RetrainResponse(BaseModel):
 def get_collection(dataset: str) -> chromadb.Collection:
     """Get or load a ChromaDB collection."""
     if dataset not in _collections:
-        db_path = Path(f"data/{dataset}/chroma")
-        if not db_path.exists():
+        chroma_path = dataset_chroma_path(dataset)
+        if not chroma_path.exists():
             raise HTTPException(404, f"Dataset '{dataset}' not found")
-        _clients[dataset] = chromadb.PersistentClient(path=str(db_path))
+        _clients[dataset] = chromadb.PersistentClient(path=str(chroma_path))
         _collections[dataset] = _clients[dataset].get_collection(dataset)
     return _collections[dataset]
 
@@ -187,11 +186,11 @@ def get_collection(dataset: str) -> chromadb.Collection:
 @app.get("/api/datasets")
 def list_datasets() -> list[str]:
     """List available datasets."""
-    data_dir = Path("data")
-    if not data_dir.exists():
+    from style_search.config import DATA_DIR
+    if not DATA_DIR.exists():
         return []
     return [
-        d.name for d in data_dir.iterdir()
+        d.name for d in DATA_DIR.iterdir()
         if d.is_dir() and (d / "chroma").exists()
     ]
 

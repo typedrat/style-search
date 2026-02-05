@@ -22,6 +22,7 @@ from sklearn.cluster import KMeans
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
+from style_search.config import LOG_DIR, MODELS_DIR, TRIPLETS_DB, dataset_dir
 from style_search.train_similarity import (
     TripletDataset,
     WeightedDistance,
@@ -32,7 +33,6 @@ from style_search.train_similarity import (
 )
 
 # Configure logging to file
-LOG_DIR = Path("data/logs")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "active_learning.log"
 
@@ -63,7 +63,6 @@ _triplet_cache: dict[str, list[tuple[str, str, str]]] = {}  # recent triplets fo
 _model_locks: dict[str, threading.Lock] = {}
 
 # Constants
-MODELS_DIR = Path("data/models")
 N_CLUSTERS = 30
 WARM_UPDATE_STEPS = 5
 WARM_UPDATE_BATCH_SIZE = 10
@@ -144,7 +143,7 @@ def _metadata_path(dataset: str, version: int) -> Path:
 
 def _legacy_weights_path(dataset: str) -> Path:
     """Get the legacy weights path for migration."""
-    return Path(f"data/{dataset}/similarity_weights.safetensors")
+    return dataset_dir(dataset) / "similarity_weights.safetensors"
 
 
 def get_model(dataset: str) -> WeightedDistance:
@@ -187,7 +186,7 @@ def get_anchor_counts(dataset: str) -> dict[str, int]:
 
 def _refresh_anchor_counts(dataset: str) -> None:
     """Refresh anchor counts from the database."""
-    db_path = Path("data/triplets.db")
+    db_path = TRIPLETS_DB
     if not db_path.exists():
         _anchor_counts[dataset] = {}
         return
@@ -364,7 +363,7 @@ def full_retrain(dataset: str) -> dict:
     logger.info(f"Full retrain [{dataset}]: starting")
     lock = _get_lock(dataset)
     with lock:
-        db_path = Path("data/triplets.db")
+        db_path = TRIPLETS_DB
         triplets = load_triplets(db_path, dataset)
         embeddings = get_embeddings(dataset)
 
@@ -580,7 +579,7 @@ def get_model_status(dataset: str) -> ModelStatus:
         path = legacy_path
 
     # Count triplets
-    db_path = Path("data/triplets.db")
+    db_path = TRIPLETS_DB
     num_triplets = 0
     if db_path.exists():
         conn = sqlite3.connect(db_path)
