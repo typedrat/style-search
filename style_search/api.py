@@ -662,14 +662,24 @@ def add_user(name: str):
 
 @cli.command()
 def list_users():
-    """List all users in the allowlist."""
+    """List all users in the allowlist with triplet stats."""
     with get_db() as conn:
-        rows = conn.execute("SELECT token, name, created_at FROM users ORDER BY created_at").fetchall()
+        rows = conn.execute("""
+            SELECT u.token, u.name, u.created_at,
+                   COUNT(t.id) as total_triplets,
+                   SUM(CASE WHEN t.choice IS NOT NULL THEN 1 ELSE 0 END) as judgments,
+                   SUM(CASE WHEN t.choice IS NULL THEN 1 ELSE 0 END) as skips
+            FROM users u
+            LEFT JOIN triplets t ON u.token = t.user_id
+            GROUP BY u.token
+            ORDER BY u.created_at
+        """).fetchall()
         if not rows:
             print("No users found.")
             return
         for row in rows:
-            print(f"{row['name']}: {row['token'][:16]}... (created {row['created_at']})")
+            stats = f"{row['total_triplets']} triplets ({row['judgments']} judgments, {row['skips']} skips)"
+            print(f"{row['name']}: {row['token'][:16]}... | {stats} | created {row['created_at']}")
 
 
 @cli.command()
