@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -11,7 +12,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import chromadb
 import numpy as np
 import torch
 import torch.nn as nn
@@ -30,6 +30,26 @@ from style_search.train_similarity import (
     load_triplets,
     train,
 )
+
+# Configure logging to file
+LOG_DIR = Path("data/logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = LOG_DIR / "active_learning.log"
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# File handler - append mode
+if not logger.handlers:
+    _handler = logging.FileHandler(LOG_FILE, mode="a")
+    _handler.setLevel(logging.INFO)
+    _handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s | %(levelname)s | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    logger.addHandler(_handler)
 
 # In-memory state (per dataset)
 _models: dict[str, WeightedDistance] = {}
@@ -246,12 +266,13 @@ def save_weights(dataset: str, metadata: dict | None = None) -> int:
     if metadata:
         full_metadata.update(metadata)
 
-    # Save safetensors with basic metadata (string values only)
+    # Save safetensors with basic metadata (string values only, skip lists/dicts)
     tensors = {"weights": model.weights.data}
     safetensors_meta = {}
     if metadata:
         for key, value in metadata.items():
-            safetensors_meta[key] = str(value)
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                safetensors_meta[key] = str(value)
     safetensors_meta["version"] = str(version)
     save_file(tensors, weights_path, metadata=safetensors_meta)
 
@@ -299,6 +320,7 @@ def warm_update(dataset: str, triplet: tuple[str, str, str]) -> None:
         ]
 
         if not valid_triplets:
+            logger.debug(f"Warm update [{dataset}]: no valid triplets in cache")
             return
 
         # Prepare tensors
@@ -317,11 +339,21 @@ def warm_update(dataset: str, triplet: tuple[str, str, str]) -> None:
         loss_fn = nn.TripletMarginWithDistanceLoss(distance_function=model, margin=0.2)
 
         model.train()
-        for _ in range(WARM_UPDATE_STEPS):
+        initial_loss = None
+        final_loss = None
+        for step in range(WARM_UPDATE_STEPS):
             optimizer.zero_grad()
             loss = loss_fn(anchors, positives, negatives)
+            if step == 0:
+                initial_loss = loss.item()
             loss.backward()
             optimizer.step()
+            final_loss = loss.item()
+
+        logger.info(
+            f"Warm update [{dataset}]: {len(valid_triplets)} triplets, "
+            f"{WARM_UPDATE_STEPS} steps, loss {initial_loss:.4f} -> {final_loss:.4f}"
+        )
 
 
 def full_retrain(dataset: str) -> dict:
@@ -329,6 +361,7 @@ def full_retrain(dataset: str) -> dict:
 
     Returns metrics dict with train_accuracy, baseline_accuracy, etc.
     """
+    logger.info(f"Full retrain [{dataset}]: starting")
     lock = _get_lock(dataset)
     with lock:
         db_path = Path("data/triplets.db")
@@ -336,6 +369,7 @@ def full_retrain(dataset: str) -> dict:
         embeddings = get_embeddings(dataset)
 
         if not triplets:
+            logger.warning(f"Full retrain [{dataset}]: no triplets found")
             return {"error": "No triplets found", "num_triplets": 0}
 
         # Initialize fresh model
@@ -352,7 +386,8 @@ def full_retrain(dataset: str) -> dict:
         triplet_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 
         # Train
-        loss_history = train(model, triplet_loader, epochs=100, lr=0.01, margin=0.2)
+        logger.info(f"Full retrain [{dataset}]: training on {len(triplets)} triplets")
+        loss_history = train(model, triplet_loader, epochs=100, lr=0.01, margin=0.2, l2_weight=0.01)
 
         # Evaluate
         train_acc = evaluate(model, triplets, embeddings)
@@ -372,12 +407,18 @@ def full_retrain(dataset: str) -> dict:
                 "learning_rate": 0.01,
                 "margin": 0.2,
                 "batch_size": 32,
+                "l2_weight": 0.01,
                 "loss_history": loss_history,
             },
         )
 
         # Clear triplet cache
         _triplet_cache[dataset] = []
+
+        logger.info(
+            f"Full retrain [{dataset}]: complete v{version:03d} | "
+            f"accuracy {baseline_acc:.1%} -> {train_acc:.1%} (+{train_acc - baseline_acc:.1%})"
+        )
 
         return {
             "version": version,
@@ -415,6 +456,11 @@ def suggest_triplet(dataset: str, n_candidates: int = 100) -> SuggestedTriplet:
     best_uncertainty = 0.0
     best_diversity = 0.0
 
+    # Track all scores for logging
+    all_uncertainties = []
+    all_diversities = []
+    all_scores = []
+
     model.eval()
     with torch.no_grad():
         for anchor, a, b in candidates:
@@ -436,16 +482,35 @@ def suggest_triplet(dataset: str, n_candidates: int = 100) -> SuggestedTriplet:
             # Combined score (tune weights as needed)
             score = 0.6 * uncertainty + 0.4 * diversity
 
+            all_uncertainties.append(uncertainty)
+            all_diversities.append(diversity)
+            all_scores.append(score)
+
             if score > best_score:
                 best_score = score
                 best_triplet = (anchor, a, b)
                 best_uncertainty = uncertainty
                 best_diversity = diversity
 
+    # Log active learning statistics
+    if all_scores:
+        uncertainties = np.array(all_uncertainties)
+        diversities = np.array(all_diversities)
+        scores = np.array(all_scores)
+
+        logger.info(
+            f"Active learning [{dataset}]: sampled {n_candidates} candidates | "
+            f"uncertainty: mean={uncertainties.mean():.3f}, max={uncertainties.max():.3f} | "
+            f"diversity: mean={diversities.mean():.3f}, max={diversities.max():.3f} | "
+            f"selected: uncertainty={best_uncertainty:.3f}, diversity={best_diversity:.3f}, "
+            f"score={best_score:.3f} (rank={int((scores < best_score).sum())+1}/{len(scores)})"
+        )
+
     if best_triplet is None:
         # Fallback to random
         import random
 
+        logger.warning(f"Active learning [{dataset}]: no valid candidates, falling back to random")
         anchor = random.choice(ids)
         a = random.choice([x for x in ids if x != anchor])
         b = random.choice([x for x in ids if x != anchor and x != a])
