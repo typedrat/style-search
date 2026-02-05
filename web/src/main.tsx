@@ -4,6 +4,7 @@ import { RouterProvider, createRouter } from '@tanstack/react-router'
 import './index.css'
 import { routeTree } from './routeTree.gen'
 import { ThemeProvider } from './components/theme-provider'
+import { UserProvider } from './components/user-provider'
 
 const router = createRouter({ routeTree })
 
@@ -16,7 +17,9 @@ declare module '@tanstack/react-router' {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ThemeProvider>
-      <RouterProvider router={router} />
+      <UserProvider>
+        <RouterProvider router={router} />
+      </UserProvider>
     </ThemeProvider>
   </StrictMode>,
 )

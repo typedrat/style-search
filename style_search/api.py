@@ -8,7 +8,7 @@ from pathlib import Path
 import click
 import chromadb
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -36,6 +36,15 @@ def get_db():
 def init_db():
     """Initialize the triplets database."""
     with get_db() as conn:
+        # Users table for allowlist
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                token TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS triplets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,6 +54,7 @@ def init_db():
                 option_b TEXT NOT NULL,
                 choice TEXT,  -- 'A', 'B', or NULL for skip
                 skip_reason TEXT,  -- 'too_similar', 'anchor_outlier', 'unknown', or NULL
+                user_id TEXT,  -- references users(token)
                 timestamp INTEGER NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
@@ -59,6 +69,13 @@ def init_db():
             conn.execute("ALTER TABLE triplets ADD COLUMN skip_reason TEXT")
             # Migrate legacy skips to 'unknown'
             conn.execute("UPDATE triplets SET skip_reason = 'unknown' WHERE choice IS NULL AND skip_reason IS NULL")
+        # Migration: add user_id column if it doesn't exist
+        if "user_id" not in columns:
+            conn.execute("ALTER TABLE triplets ADD COLUMN user_id TEXT")
+        # Create index on user_id (after migration ensures column exists)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_triplets_user ON triplets(user_id)
+        """)
         conn.commit()
 
 
@@ -103,6 +120,7 @@ class TripletCreate(BaseModel):
     option_b: str
     choice: str | None  # 'A', 'B', or None for skip
     skip_reason: str | None = None  # 'too_similar', 'anchor_outlier', 'unknown'
+    user_id: str | None = None
     timestamp: int
 
 
@@ -114,7 +132,19 @@ class TripletResponse(BaseModel):
     option_b: str
     choice: str | None
     skip_reason: str | None
+    user_id: str | None
     timestamp: int
+
+
+def validate_user(token: str | None) -> str | None:
+    """Validate a user token against the allowlist. Returns token if valid, None if no auth required."""
+    if token is None:
+        return None
+    with get_db() as conn:
+        row = conn.execute("SELECT token FROM users WHERE token = ?", (token,)).fetchone()
+        if not row:
+            raise HTTPException(403, "Invalid user token")
+        return token
 
 
 class SuggestedTripletResponse(BaseModel):
@@ -306,18 +336,21 @@ def get_artist_image(dataset: str, artist_id: str):
 @app.post("/api/triplets")
 def create_triplet(triplet: TripletCreate, background_tasks: BackgroundTasks) -> TripletResponse:
     """Store a new triplet judgment."""
+    # Validate user if provided
+    user_id = validate_user(triplet.user_id)
+
     with get_db() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO triplets (dataset, anchor, option_a, option_b, choice, skip_reason, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO triplets (dataset, anchor, option_a, option_b, choice, skip_reason, user_id, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (triplet.dataset, triplet.anchor, triplet.option_a, triplet.option_b, triplet.choice, triplet.skip_reason, triplet.timestamp),
+            (triplet.dataset, triplet.anchor, triplet.option_a, triplet.option_b, triplet.choice, triplet.skip_reason, user_id, triplet.timestamp),
         )
         conn.commit()
         triplet_id = cursor.lastrowid
 
-        # Count triplets for this dataset to check if we need a full retrain
+        # Count triplets for this dataset to check if we need a full retrain (all users)
         count_row = conn.execute(
             "SELECT COUNT(*) FROM triplets WHERE dataset = ? AND choice IS NOT NULL",
             (triplet.dataset,),
@@ -353,18 +386,32 @@ def create_triplet(triplet: TripletCreate, background_tasks: BackgroundTasks) ->
         option_b=triplet.option_b,
         choice=triplet.choice,
         skip_reason=triplet.skip_reason,
+        user_id=user_id,
         timestamp=triplet.timestamp,
     )
 
 
 @app.get("/api/triplets")
-def get_triplets(dataset: str | None = None) -> list[TripletResponse]:
-    """Get all triplets, optionally filtered by dataset."""
+def get_triplets(dataset: str | None = None, user: str | None = None) -> list[TripletResponse]:
+    """Get triplets, filtered by dataset and/or user."""
+    # Validate user if provided
+    user_id = validate_user(user)
+
     with get_db() as conn:
-        if dataset:
+        if dataset and user_id:
+            rows = conn.execute(
+                "SELECT * FROM triplets WHERE dataset = ? AND user_id = ? ORDER BY id",
+                (dataset, user_id),
+            ).fetchall()
+        elif dataset:
             rows = conn.execute(
                 "SELECT * FROM triplets WHERE dataset = ? ORDER BY id",
                 (dataset,),
+            ).fetchall()
+        elif user_id:
+            rows = conn.execute(
+                "SELECT * FROM triplets WHERE user_id = ? ORDER BY id",
+                (user_id,),
             ).fetchall()
         else:
             rows = conn.execute("SELECT * FROM triplets ORDER BY id").fetchall()
@@ -377,6 +424,7 @@ def get_triplets(dataset: str | None = None) -> list[TripletResponse]:
                 option_b=row["option_b"],
                 choice=row["choice"],
                 skip_reason=row["skip_reason"],
+                user_id=row["user_id"],
                 timestamp=row["timestamp"],
             )
             for row in rows
@@ -386,16 +434,24 @@ def get_triplets(dataset: str | None = None) -> list[TripletResponse]:
 class TripletUpdate(BaseModel):
     choice: str | None = None  # 'A', 'B', or None for skip
     skip_reason: str | None = None  # 'too_similar', 'anchor_outlier', 'unknown'
+    user_id: str | None = None  # for ownership verification
 
 
 @app.patch("/api/triplets/{triplet_id}")
 def update_triplet(triplet_id: int, update: TripletUpdate) -> TripletResponse:
     """Update a triplet's choice and/or skip_reason."""
+    # Validate user if provided
+    user_id = validate_user(update.user_id)
+
     with get_db() as conn:
         # Check if triplet exists
         row = conn.execute("SELECT * FROM triplets WHERE id = ?", (triplet_id,)).fetchone()
         if not row:
             raise HTTPException(404, f"Triplet {triplet_id} not found")
+
+        # Check ownership if user_id provided
+        if user_id and row["user_id"] != user_id:
+            raise HTTPException(403, "You can only edit your own triplets")
 
         conn.execute(
             "UPDATE triplets SET choice = ?, skip_reason = ? WHERE id = ?",
@@ -412,14 +468,24 @@ def update_triplet(triplet_id: int, update: TripletUpdate) -> TripletResponse:
             option_b=row["option_b"],
             choice=row["choice"],
             skip_reason=row["skip_reason"],
+            user_id=row["user_id"],
             timestamp=row["timestamp"],
         )
 
 
 @app.delete("/api/triplets/{triplet_id}")
-def delete_triplet(triplet_id: int):
+def delete_triplet(triplet_id: int, user: str | None = None):
     """Delete a triplet."""
+    # Validate user if provided
+    user_id = validate_user(user)
+
     with get_db() as conn:
+        # Check ownership if user_id provided
+        if user_id:
+            row = conn.execute("SELECT user_id FROM triplets WHERE id = ?", (triplet_id,)).fetchone()
+            if row and row["user_id"] != user_id:
+                raise HTTPException(403, "You can only delete your own triplets")
+
         cursor = conn.execute("DELETE FROM triplets WHERE id = ?", (triplet_id,))
         conn.commit()
         if cursor.rowcount == 0:
@@ -480,11 +546,32 @@ def get_model_status(dataset: str) -> ModelStatusResponse:
         raise HTTPException(500, f"Failed to get model status: {e}")
 
 
-@click.command()
+class UserResponse(BaseModel):
+    token: str
+    name: str
+
+
+@app.get("/api/users/me")
+def get_current_user(user: str = Query(..., description="User token")) -> UserResponse:
+    """Verify a user token and return user info."""
+    with get_db() as conn:
+        row = conn.execute("SELECT token, name FROM users WHERE token = ?", (user,)).fetchone()
+        if not row:
+            raise HTTPException(403, "Invalid user token")
+        return UserResponse(token=row["token"], name=row["name"])
+
+
+@click.group()
+def cli():
+    """Style Search API commands."""
+    pass
+
+
+@cli.command()
 @click.option("-h", "--host", default="127.0.0.1", help="Host to bind to")
 @click.option("-p", "--port", default=8000, help="Port to bind to")
 @click.option("--reload", is_flag=True, help="Enable auto-reload")
-def main(host: str, port: int, reload: bool):
+def serve(host: str, port: int, reload: bool):
     """Run the style-search API server."""
     uvicorn.run(
         "style_search.api:app",
@@ -492,6 +579,59 @@ def main(host: str, port: int, reload: bool):
         port=port,
         reload=reload,
     )
+
+
+@cli.command()
+@click.argument("name")
+def add_user(name: str):
+    """Add a user to the allowlist. Generates a random token."""
+    import hashlib
+    import secrets
+
+    token = hashlib.sha256(secrets.token_bytes(32)).hexdigest()
+
+    with get_db() as conn:
+        conn.execute("INSERT INTO users (token, name) VALUES (?, ?)", (token, name))
+        conn.commit()
+
+    print(f"Created user '{name}'")
+    print(f"Token: {token}")
+    print(f"Share URL: https://your-domain.com/?user={token}")
+
+
+@cli.command()
+def list_users():
+    """List all users in the allowlist."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT token, name, created_at FROM users ORDER BY created_at").fetchall()
+        if not rows:
+            print("No users found.")
+            return
+        for row in rows:
+            print(f"{row['name']}: {row['token'][:16]}... (created {row['created_at']})")
+
+
+@cli.command()
+@click.argument("token")
+def remove_user(token: str):
+    """Remove a user from the allowlist."""
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM users WHERE token = ?", (token,))
+        conn.commit()
+        if cursor.rowcount == 0:
+            print(f"User not found: {token}")
+        else:
+            print(f"Removed user with token: {token[:16]}...")
+
+
+def main():
+    """Entry point that supports both old and new CLI styles."""
+    import sys
+    # If no subcommand given or first arg looks like an option, default to serve
+    if len(sys.argv) == 1 or (len(sys.argv) > 1 and sys.argv[1].startswith("-")):
+        serve(standalone_mode=False)
+    else:
+        cli()
 
 
 if __name__ == "__main__":

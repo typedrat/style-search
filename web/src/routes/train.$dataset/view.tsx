@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
-import { ArrowLeft, Trash2 } from 'lucide-react'
+import { ArrowLeft, Trash2, User } from 'lucide-react'
 import {
   type Triplet,
   type SkipReason,
@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { useUser } from '@/components/user-provider'
 
 export const Route = createFileRoute('/train/$dataset/view')({
   component: ViewTripletsPage,
@@ -28,6 +29,7 @@ export const Route = createFileRoute('/train/$dataset/view')({
 function ViewTripletsPage() {
   const { dataset } = Route.useParams()
   const navigate = useNavigate()
+  const { user, loading: userLoading, error: userError } = useUser()
 
   const [datasets, setDatasets] = useState<string[]>([])
   const [triplets, setTriplets] = useState<Triplet[]>([])
@@ -64,6 +66,30 @@ function ViewTripletsPage() {
   const skipped = triplets.filter((t) => t.choice === null)
   const judged = triplets.filter((t) => t.choice !== null)
 
+  // Show loading state
+  if (userLoading) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-background text-muted-foreground">
+        Checking authentication...
+      </div>
+    )
+  }
+
+  // Require authentication
+  if (!user) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-background text-foreground gap-4">
+        <h1 className="text-xl font-semibold">Authentication Required</h1>
+        <p className="text-muted-foreground">
+          {userError || 'You need a valid user token to view your training data.'}
+        </p>
+        <Link to="/$dataset" params={{ dataset }}>
+          <Button variant="outline">Back to Browse</Button>
+        </Link>
+      </div>
+    )
+  }
+
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">
       <header className="border-b border-border px-4 py-3 flex items-center justify-between shrink-0">
@@ -91,6 +117,10 @@ function ViewTripletsPage() {
           <span className="text-sm text-muted-foreground">
             {judged.length} judged, {skipped.length} skipped
           </span>
+          <div className="flex items-center gap-1.5 text-sm text-muted-foreground border-l border-border pl-4">
+            <User className="size-4" />
+            <span>{user.name}</span>
+          </div>
         </div>
       </header>
 

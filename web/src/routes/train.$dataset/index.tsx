@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, User } from 'lucide-react'
 import {
   type Artist,
   type SkipReason,
@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { useUser } from '@/components/user-provider'
 
 export const Route = createFileRoute('/train/$dataset/')({
   component: TrainView,
@@ -33,6 +34,7 @@ function pickRandom<T>(arr: T[], exclude: Set<T> = new Set()): T {
 function TrainView() {
   const { dataset } = Route.useParams()
   const navigate = useNavigate()
+  const { user, loading: userLoading, error: userError } = useUser()
 
   const [datasets, setDatasets] = useState<string[]>([])
   const [artists, setArtists] = useState<Artist[]>([])
@@ -190,6 +192,33 @@ function TrainView() {
     URL.revokeObjectURL(url)
   }
 
+  // Show loading state
+  if (userLoading) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-background text-muted-foreground">
+        Checking authentication...
+      </div>
+    )
+  }
+
+  // Require authentication for training
+  if (!user) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-background text-foreground gap-4">
+        <h1 className="text-xl font-semibold">Authentication Required</h1>
+        <p className="text-muted-foreground">
+          {userError || 'You need a valid user token to contribute training data.'}
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Ask for a link with your user token to get started.
+        </p>
+        <Link to="/$dataset" params={{ dataset }}>
+          <Button variant="outline">Back to Browse</Button>
+        </Link>
+      </div>
+    )
+  }
+
   if (!anchor || !optionA || !optionB || suggestionLoading) {
     return (
       <div className="flex items-center justify-center h-screen bg-background text-muted-foreground">
@@ -241,6 +270,10 @@ function TrainView() {
           <Button variant="outline" size="sm" onClick={handleExport}>
             Export
           </Button>
+          <div className="flex items-center gap-1.5 text-sm text-muted-foreground border-l border-border pl-4">
+            <User className="size-4" />
+            <span>{user.name}</span>
+          </div>
         </div>
       </header>
 

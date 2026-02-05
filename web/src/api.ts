@@ -74,20 +74,54 @@ export interface Triplet {
   option_b: string
   choice: 'A' | 'B' | null  // null = skipped
   skip_reason: SkipReason | null
+  user_id?: string | null
   timestamp: number
 }
 
+export interface User {
+  token: string
+  name: string
+}
+
+// User token management
+const USER_TOKEN_KEY = 'style-search-user-token'
+
+export function getUserToken(): string | null {
+  return localStorage.getItem(USER_TOKEN_KEY)
+}
+
+export function setUserToken(token: string): void {
+  localStorage.setItem(USER_TOKEN_KEY, token)
+}
+
+export function clearUserToken(): void {
+  localStorage.removeItem(USER_TOKEN_KEY)
+}
+
+export async function validateUser(token: string): Promise<User> {
+  const res = await fetch(`/api/users/me?user=${encodeURIComponent(token)}`)
+  if (!res.ok) {
+    throw new Error('Invalid user token')
+  }
+  return res.json()
+}
+
 export async function createTriplet(triplet: Omit<Triplet, 'id'>): Promise<Triplet> {
+  const userToken = getUserToken()
   const res = await fetch('/api/triplets', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(triplet),
+    body: JSON.stringify({ ...triplet, user_id: userToken }),
   })
   return res.json()
 }
 
 export async function getTriplets(dataset?: string): Promise<Triplet[]> {
-  const url = dataset ? `/api/triplets?dataset=${encodeURIComponent(dataset)}` : '/api/triplets'
+  const userToken = getUserToken()
+  const params = new URLSearchParams()
+  if (dataset) params.set('dataset', dataset)
+  if (userToken) params.set('user', userToken)
+  const url = `/api/triplets${params.toString() ? '?' + params.toString() : ''}`
   const res = await fetch(url)
   return res.json()
 }
@@ -96,16 +130,19 @@ export async function updateTriplet(
   id: number,
   update: { choice: 'A' | 'B' | null; skip_reason: SkipReason | null }
 ): Promise<Triplet> {
+  const userToken = getUserToken()
   const res = await fetch(`/api/triplets/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(update),
+    body: JSON.stringify({ ...update, user_id: userToken }),
   })
   return res.json()
 }
 
 export async function deleteTriplet(id: number): Promise<void> {
-  await fetch(`/api/triplets/${id}`, { method: 'DELETE' })
+  const userToken = getUserToken()
+  const params = userToken ? `?user=${encodeURIComponent(userToken)}` : ''
+  await fetch(`/api/triplets/${id}${params}`, { method: 'DELETE' })
 }
 
 export interface SuggestedTriplet {
