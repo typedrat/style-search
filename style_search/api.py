@@ -355,10 +355,11 @@ def get_artist_image(dataset: str, artist_id: str):
     if not uri:
         raise HTTPException(404, f"No image for artist '{artist_id}'")
 
-    # URI should be a file path
-    image_path = Path(uri)
+    # URI is a filename relative to the dataset directory
+    from style_search.config import dataset_dir
+    image_path = dataset_dir(dataset) / Path(uri).name
     if not image_path.exists():
-        raise HTTPException(404, f"Image file not found: {uri}")
+        raise HTTPException(404, f"Image file not found: {image_path}")
 
     return FileResponse(image_path)
 

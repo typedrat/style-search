@@ -205,7 +205,7 @@ def main(input_dir: Path, db_path: Path | None, model: str, batch_size: int, res
                     img = Image.open(img_path).convert("RGB")
                     images.append(img)
                     batch_ids.append(artist)
-                    batch_uris.append(str(img_path.absolute()))
+                    batch_uris.append(img_path.name)
                     # Store artist metadata (excluding image_url which is in uri)
                     batch_metadata.append({
                         k: v for k, v in data.items()
