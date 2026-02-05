@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """FastAPI backend for style-search visualization."""
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -10,13 +11,43 @@ import chromadb
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from style_search import similarity
 from style_search.config import TRIPLETS_DB, dataset_chroma_path
 
 app = FastAPI(title="Style Search API")
+
+# Static file serving for production (set via STYLE_SEARCH_STATIC_DIR env var)
+_static_dir: Path | None = None
+
+
+def configure_static_files(static_dir: str | Path | None) -> None:
+    """Configure static file serving for the frontend."""
+    global _static_dir
+    if static_dir is None:
+        return
+
+    static_path = Path(static_dir)
+    if not static_path.exists():
+        print(f"Warning: Static directory does not exist: {static_path}")
+        return
+
+    _static_dir = static_path
+
+    # Mount static assets (js, css, etc.) - but not at root to avoid conflicts
+    assets_dir = static_path / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+        print(f"Serving static assets from {assets_dir}")
+
+
+# Check for static dir env var at import time
+_env_static_dir = os.environ.get("STYLE_SEARCH_STATIC_DIR")
+if _env_static_dir:
+    configure_static_files(_env_static_dir)
 
 
 @contextmanager
@@ -560,6 +591,28 @@ def get_current_user(user: str = Query(..., description="User token")) -> UserRe
         return UserResponse(token=row["token"], name=row["name"])
 
 
+# SPA catch-all route - must be defined last to avoid conflicts with API routes
+@app.get("/{path:path}", include_in_schema=False)
+def serve_spa(path: str):
+    """Serve static files or the SPA index for client-side routing (production only)."""
+    if _static_dir is None:
+        raise HTTPException(404, "Not found")
+
+    # Try to serve an actual static file (e.g., vite.svg, favicon.ico)
+    # Resolve to absolute path and verify it's within the static directory
+    static_file = (_static_dir / path).resolve()
+    static_root = _static_dir.resolve()
+    if static_file.is_file() and static_root in static_file.parents:
+        return FileResponse(static_file)
+
+    # Otherwise, serve index.html for SPA routing
+    index_file = _static_dir / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file, media_type="text/html")
+
+    raise HTTPException(404, "Not found")
+
+
 @click.group()
 def cli():
     """Style Search API commands."""
@@ -570,8 +623,16 @@ def cli():
 @click.option("-h", "--host", default="127.0.0.1", help="Host to bind to")
 @click.option("-p", "--port", default=8000, help="Port to bind to")
 @click.option("--reload", is_flag=True, help="Enable auto-reload")
-def serve(host: str, port: int, reload: bool):
+@click.option(
+    "--static-dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Serve frontend static files from this directory (e.g., web/dist)",
+)
+def serve(host: str, port: int, reload: bool, static_dir: Path | None):
     """Run the style-search API server."""
+    # Set static dir via env var so it's picked up when uvicorn imports the app
+    if static_dir:
+        os.environ["STYLE_SEARCH_STATIC_DIR"] = str(static_dir)
     uvicorn.run(
         "style_search.api:app",
         host=host,
