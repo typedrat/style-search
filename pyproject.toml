@@ -25,12 +25,14 @@ dependencies = [
     "torchvision>=0.25",
     "umap-learn>=0.5",
     "uvicorn>=0.40",
+    "plotext>=5.3",
 ]
 
 [project.scripts]
 scrape-doomp = "style_search.scrape_doomp:main"
 embed-images = "style_search.embed_images:main"
 style-api = "style_search.api:main"
+model-info = "style_search.model_info:main"
 
 [[tool.uv.index]]
 name = "pytorch-cu130"
