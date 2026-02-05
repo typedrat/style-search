@@ -2,6 +2,7 @@
 """Train a weighted similarity function from triplet judgments."""
 
 import json
+import random
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -107,30 +108,36 @@ class WeightedDistance(nn.Module):
 
 
 class TripletDataset(Dataset):
-    """Dataset of triplet judgments."""
+    """Dataset of triplet judgments with optional sample weights."""
 
     def __init__(
         self,
         triplets: list[tuple[str, str, str]],
         embeddings: dict[str, np.ndarray],
+        weights: list[float] | None = None,
     ):
         # Filter to triplets where all artists have embeddings
-        self.triplets = [
-            t for t in triplets
+        valid_indices = [
+            i for i, t in enumerate(triplets)
             if t[0] in embeddings and t[1] in embeddings and t[2] in embeddings
         ]
+        self.triplets = [triplets[i] for i in valid_indices]
         self.embeddings = embeddings
+        self.weights = (
+            [weights[i] for i in valid_indices] if weights else [1.0] * len(self.triplets)
+        )
         print(f"Loaded {len(self.triplets)} valid triplets (of {len(triplets)} total)")
 
     def __len__(self) -> int:
         return len(self.triplets)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         anchor, positive, negative = self.triplets[idx]
         return (
             torch.tensor(self.embeddings[anchor], dtype=torch.float32),
             torch.tensor(self.embeddings[positive], dtype=torch.float32),
             torch.tensor(self.embeddings[negative], dtype=torch.float32),
+            torch.tensor(self.weights[idx], dtype=torch.float32),
         )
 
 
@@ -236,12 +243,26 @@ def train(
     lr: float = 0.01,
     margin: float = 0.2,
     equality_weight: float = 0.5,
+    l2_weight: float = 0.0,
 ) -> list[float]:
-    """Train the model with triplet margin loss and optional equality constraints."""
+    """Train the model with triplet margin loss and optional equality constraints.
+
+    Args:
+        model: The WeightedDistance model to train
+        triplet_loader: DataLoader for triplet data
+        equality_loader: Optional DataLoader for equality constraints
+        epochs: Number of training epochs
+        lr: Learning rate
+        margin: Triplet margin
+        equality_weight: Weight for equality constraint loss
+        l2_weight: L2 regularization weight (pulls weights toward uniform)
+    """
     optimizer = optim.Adam(model.parameters(), lr=lr)
+    # Use reduction='none' to get per-sample losses for weighting
     triplet_loss_fn = nn.TripletMarginWithDistanceLoss(
         distance_function=model,
         margin=margin,
+        reduction="none",
     )
 
     losses = []
@@ -250,9 +271,11 @@ def train(
         n_batches = 0
 
         # Triplet loss
-        for anchor, positive, negative in triplet_loader:
+        for anchor, positive, negative, sample_weights in triplet_loader:
             optimizer.zero_grad()
-            loss = triplet_loss_fn(anchor, positive, negative)
+            per_sample_loss = triplet_loss_fn(anchor, positive, negative)
+            # Apply sample weights and reduce
+            loss = torch.mean(per_sample_loss * sample_weights)
 
             # Add equality constraint loss if available
             if equality_loader is not None and len(equality_loader) > 0:
@@ -264,6 +287,12 @@ def train(
                 # L1 loss: distances should be equal
                 eq_loss = torch.mean(torch.abs(d_a - d_b))
                 loss = loss + equality_weight * eq_loss
+
+            # L2 regularization: penalize deviation from uniform weights
+            # softplus(0) ≈ 0.693, so we pull toward that (uniform weighting)
+            if l2_weight > 0:
+                l2_loss = l2_weight * torch.mean(model.weights ** 2)
+                loss = loss + l2_loss
 
             loss.backward()
             optimizer.step()
@@ -309,21 +338,29 @@ def evaluate(
 
 
 def load_multi_dataset(
-    db_path: Path, datasets: list[str]
-) -> tuple[list[tuple[str, str, str]], list[tuple[str, str, str]], dict[str, np.ndarray]]:
+    db_path: Path, datasets: list[str], balance_datasets: bool = False
+) -> tuple[list[tuple[str, str, str]], list[tuple[str, str, str]], dict[str, np.ndarray], list[float] | None]:
     """Load triplets and embeddings from multiple datasets.
 
     Each dataset's IDs are prefixed with the dataset name to avoid collisions.
     This allows training on combined triplets while keeping embeddings scoped.
 
+    Args:
+        db_path: Path to the triplets database
+        datasets: List of dataset names to load
+        balance_datasets: If True, compute inverse frequency weights so each
+            dataset contributes equally to the loss regardless of size
+
     Returns:
         triplets: Combined list of (anchor, positive, negative) with prefixed IDs
         equality_constraints: Combined list of equality constraints with prefixed IDs
         embeddings: Combined dict mapping prefixed IDs to embeddings
+        weights: Per-triplet weights if balance_datasets=True, else None
     """
     all_triplets = []
     all_equality = []
     all_embeddings = {}
+    triplet_counts = {}  # Track count per dataset for weighting
 
     for dataset in datasets:
         print(f"\nLoading dataset '{dataset}'...")
@@ -334,6 +371,7 @@ def load_multi_dataset(
             (f"{dataset}:{a}", f"{dataset}:{p}", f"{dataset}:{n}")
             for a, p, n in triplets
         ]
+        triplet_counts[dataset] = len(prefixed_triplets)
         all_triplets.extend(prefixed_triplets)
         print(f"  {len(triplets)} triplet judgments")
 
@@ -352,7 +390,27 @@ def load_multi_dataset(
             all_embeddings[f"{dataset}:{artist_id}"] = emb
         print(f"  {len(embeddings)} embeddings")
 
-    return all_triplets, all_equality, all_embeddings
+    # Compute inverse frequency weights if requested
+    weights = None
+    if balance_datasets and len(datasets) > 1:
+        # Weight = 1 / (num_datasets * dataset_count) so each dataset sums to 1/num_datasets
+        # This normalizes so total weight per dataset is equal
+        num_datasets = len(datasets)
+        weights = []
+        for dataset in datasets:
+            count = triplet_counts[dataset]
+            w = 1.0 / (num_datasets * count) if count > 0 else 0.0
+            weights.extend([w] * count)
+        # Scale weights so mean = 1 (preserves loss magnitude)
+        mean_weight = sum(weights) / len(weights) if weights else 1.0
+        weights = [w / mean_weight for w in weights]
+        print(f"\nDataset balancing enabled:")
+        for dataset in datasets:
+            count = triplet_counts[dataset]
+            w = 1.0 / (num_datasets * count) / mean_weight if count > 0 else 0.0
+            print(f"  {dataset}: {count} triplets, weight={w:.4f}")
+
+    return all_triplets, all_equality, all_embeddings, weights
 
 
 @click.command()
@@ -368,6 +426,26 @@ def load_multi_dataset(
     is_flag=True,
     help="Initialize dataset model dirs (backup existing, copy as v001)",
 )
+@click.option(
+    "--balance-datasets",
+    is_flag=True,
+    help="Use inverse frequency weighting so each dataset contributes equally",
+)
+@click.option(
+    "--test-split",
+    default=0.0,
+    help="Fraction of triplets to hold out for testing (0.0-0.5)",
+)
+@click.option(
+    "--seed",
+    default=42,
+    help="Random seed for train/test split",
+)
+@click.option(
+    "--l2-weight",
+    default=0.01,
+    help="L2 regularization weight (pulls weights toward uniform)",
+)
 def main(
     datasets: tuple[str, ...],
     epochs: int,
@@ -377,6 +455,10 @@ def main(
     equality_weight: float,
     output: str | None,
     init: bool,
+    balance_datasets: bool,
+    test_split: float,
+    seed: int,
+    l2_weight: float,
 ):
     """Train similarity weights from triplet judgments.
 
@@ -389,6 +471,7 @@ def main(
         raise FileNotFoundError(f"Triplets database not found: {db_path}")
 
     # Load data from all datasets
+    triplet_weights = None
     if len(datasets) == 1:
         # Single dataset - use original logic (no prefixing)
         dataset = datasets[0]
@@ -405,15 +488,33 @@ def main(
     else:
         # Multiple datasets - combine with prefixed IDs
         print(f"Loading {len(datasets)} datasets: {', '.join(datasets)}")
-        triplets, equality_constraints, embeddings = load_multi_dataset(db_path, list(datasets))
+        triplets, equality_constraints, embeddings, triplet_weights = load_multi_dataset(
+            db_path, list(datasets), balance_datasets=balance_datasets
+        )
         print(f"\nCombined: {len(triplets)} triplets, {len(equality_constraints)} equality constraints, {len(embeddings)} embeddings")
 
     if len(triplets) == 0:
         print("No triplets found. Collect some training data first!")
         return
 
+    # Train/test split
+    test_triplets = []
+    if test_split > 0:
+        random.seed(seed)
+        n_test = int(len(triplets) * test_split)
+        indices = list(range(len(triplets)))
+        random.shuffle(indices)
+        test_indices = set(indices[:n_test])
+        train_indices = indices[n_test:]
+
+        test_triplets = [triplets[i] for i in test_indices]
+        triplets = [triplets[i] for i in train_indices]
+        if triplet_weights:
+            triplet_weights = [triplet_weights[i] for i in train_indices]
+        print(f"\nTrain/test split: {len(triplets)} train, {len(test_triplets)} test ({test_split:.0%})")
+
     # Create datasets and dataloaders
-    train_dataset = TripletDataset(triplets, embeddings)
+    train_dataset = TripletDataset(triplets, embeddings, weights=triplet_weights)
     triplet_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
     equality_loader = None
@@ -428,7 +529,11 @@ def main(
 
     # Evaluate baseline (uniform weights)
     baseline_acc = evaluate(model, triplets, embeddings)
-    print(f"Baseline accuracy (uniform weights): {baseline_acc:.1%}")
+    baseline_test_acc = evaluate(model, test_triplets, embeddings) if test_triplets else None
+    if baseline_test_acc is not None:
+        print(f"Baseline accuracy (uniform weights): train={baseline_acc:.1%}, test={baseline_test_acc:.1%}")
+    else:
+        print(f"Baseline accuracy (uniform weights): {baseline_acc:.1%}")
 
     # Train
     print(f"\nTraining for {epochs} epochs...")
@@ -440,12 +545,20 @@ def main(
         lr=lr,
         margin=margin,
         equality_weight=equality_weight,
+        l2_weight=l2_weight,
     )
 
     # Evaluate trained model
     trained_acc = evaluate(model, triplets, embeddings)
-    print(f"\nTrained accuracy: {trained_acc:.1%}")
-    print(f"Improvement: {trained_acc - baseline_acc:+.1%}")
+    test_acc = evaluate(model, test_triplets, embeddings) if test_triplets else None
+    if test_acc is not None:
+        print(f"\nTrain accuracy: {trained_acc:.1%} (improvement: {trained_acc - baseline_acc:+.1%})")
+        print(f"Test accuracy:  {test_acc:.1%} (improvement: {test_acc - baseline_test_acc:+.1%})")
+        if test_acc < baseline_test_acc:
+            print("  ⚠ Test accuracy decreased — possible overfitting")
+    else:
+        print(f"\nTrained accuracy: {trained_acc:.1%}")
+        print(f"Improvement: {trained_acc - baseline_acc:+.1%}")
 
     # Determine output path and version
     # Three cases:
@@ -479,14 +592,21 @@ def main(
         "datasets": list(datasets),
         "dim": dim,
         "train_accuracy": trained_acc,
+        "test_accuracy": test_acc,
         "baseline_accuracy": baseline_acc,
+        "test_split": test_split if test_split > 0 else None,
+        "seed": seed if test_split > 0 else None,
         "epochs": epochs,
         "learning_rate": lr,
         "margin": margin,
         "batch_size": batch_size,
-        "num_triplets": len(triplets),
+        "num_train_triplets": len(triplets),
+        "num_test_triplets": len(test_triplets) if test_triplets else 0,
+        "num_triplets": len(triplets) + (len(test_triplets) if test_triplets else 0),  # total
         "num_equality_constraints": len(equality_constraints) if equality_constraints else 0,
         "equality_weight": equality_weight if equality_constraints else None,
+        "balance_datasets": balance_datasets,
+        "l2_weight": l2_weight if l2_weight > 0 else None,
         "loss_history": loss_history,
     }
 
@@ -497,9 +617,19 @@ def main(
         "train_accuracy": str(trained_acc),
         "baseline_accuracy": str(baseline_acc),
         "epochs": str(epochs),
+        "learning_rate": str(lr),
+        "margin": str(margin),
+        "batch_size": str(batch_size),
+        "l2_weight": str(l2_weight),
         "num_triplets": str(len(triplets)),
         "datasets": ",".join(datasets),
+        "balance_datasets": str(balance_datasets),
     }
+    if test_acc is not None:
+        safetensors_metadata["test_accuracy"] = str(test_acc)
+        safetensors_metadata["test_split"] = str(test_split)
+    if equality_constraints:
+        safetensors_metadata["equality_weight"] = str(equality_weight)
     if version is not None:
         safetensors_metadata["version"] = str(version)
     save_file(tensors, output_path, metadata=safetensors_metadata)
