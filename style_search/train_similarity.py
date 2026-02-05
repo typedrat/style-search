@@ -1,17 +1,93 @@
 #!/usr/bin/env python3
 """Train a weighted similarity function from triplet judgments."""
 
+import json
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
-import click
 import chromadb
+import click
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from safetensors.torch import load_file, save_file
+from safetensors.torch import save_file
 from torch.utils.data import DataLoader, Dataset
+
+# Models directory
+MODELS_DIR = Path("data/models")
+
+
+def _is_path(output: str) -> bool:
+    """Check if output is a path (contains / or \\) vs a basename."""
+    return "/" in output or "\\" in output or output.endswith(".safetensors")
+
+
+def _get_series_prefix(datasets: tuple[str, ...], epochs: int) -> str:
+    """Get the series prefix for auto-naming: {datasets}_{epochs}."""
+    datasets_part = "_".join(datasets)
+    return f"{datasets_part}_{epochs}"
+
+
+def _get_next_series_version(prefix: str) -> int:
+    """Find the next version number for a series prefix.
+
+    Looks for files matching {prefix}_v{NNN}.safetensors and returns
+    the smallest number larger than all existing versions.
+    """
+    if not MODELS_DIR.exists():
+        return 1
+    versions = []
+    for f in MODELS_DIR.glob(f"{prefix}_v*.safetensors"):
+        # Extract version from "{prefix}_v{NNN}.safetensors"
+        stem = f.stem  # e.g., "art_100_v003"
+        suffix = stem[len(prefix) + 2:]  # Skip "{prefix}_v" to get "003"
+        try:
+            version = int(suffix)
+            versions.append(version)
+        except ValueError:
+            continue
+    return (max(versions) if versions else 0) + 1
+
+
+def _init_dataset_model(
+    dataset: str,
+    weights_path: Path,
+    meta_path: Path,
+) -> None:
+    """Initialize a dataset's model directory with trained weights.
+
+    Backs up any existing directory and copies the trained model as v001.
+    This gives similarity.py a fresh starting point for live training.
+    """
+    import shutil
+
+    dataset_dir = MODELS_DIR / dataset
+
+    # Backup existing directory if present
+    if dataset_dir.exists():
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+        backup_dir = MODELS_DIR / f"{dataset}.backup.{timestamp}"
+        shutil.move(dataset_dir, backup_dir)
+        print(f"Backed up existing model directory to {backup_dir}")
+
+    # Create fresh directory with v001
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+    v001_weights = dataset_dir / "v001.safetensors"
+    v001_meta = dataset_dir / "v001.json"
+
+    shutil.copy(weights_path, v001_weights)
+    shutil.copy(meta_path, v001_meta)
+
+    # Update version in the copied metadata
+    with open(v001_meta) as f:
+        meta = json.load(f)
+    meta["version"] = 1
+    with open(v001_meta, "w") as f:
+        json.dump(meta, f, indent=2)
+
+    print(f"Initialized {dataset_dir} with v001")
 
 
 class WeightedDistance(nn.Module):
@@ -286,7 +362,12 @@ def load_multi_dataset(
 @click.option("--margin", default=0.2, help="Triplet margin")
 @click.option("--batch-size", default=32, help="Batch size")
 @click.option("--equality-weight", default=0.5, help="Weight for equality constraints")
-@click.option("--output", "-o", default=None, help="Output path for weights")
+@click.option("--output", "-o", default=None, help="Output path or basename for weights")
+@click.option(
+    "--init",
+    is_flag=True,
+    help="Initialize dataset model dirs (backup existing, copy as v001)",
+)
 def main(
     datasets: tuple[str, ...],
     epochs: int,
@@ -295,6 +376,7 @@ def main(
     batch_size: int,
     equality_weight: float,
     output: str | None,
+    init: bool,
 ):
     """Train similarity weights from triplet judgments.
 
@@ -350,7 +432,7 @@ def main(
 
     # Train
     print(f"\nTraining for {epochs} epochs...")
-    train(
+    loss_history = train(
         model,
         triplet_loader,
         equality_loader=equality_loader,
@@ -365,20 +447,52 @@ def main(
     print(f"\nTrained accuracy: {trained_acc:.1%}")
     print(f"Improvement: {trained_acc - baseline_acc:+.1%}")
 
-    # Save weights in safetensors format
+    # Determine output path and version
+    # Three cases:
+    # 1. -o with path (contains / or ends with .safetensors): use exact path
+    # 2. -o with basename: save to data/models/{basename}.safetensors
+    # 3. No -o: auto-name as data/models/{datasets}_{epochs}_v{N}.safetensors
     if output:
-        output_path = Path(output)
-    elif len(datasets) == 1:
-        output_path = Path(f"data/{datasets[0]}/similarity_weights.safetensors")
+        if _is_path(output):
+            output_path = Path(output)
+            if not output_path.suffix:
+                output_path = output_path.with_suffix(".safetensors")
+        else:
+            # Just a basename
+            output_path = MODELS_DIR / f"{output}.safetensors"
+        meta_path = output_path.with_suffix(".json")
+        version = None
     else:
-        output_path = Path("similarity_weights.safetensors")
+        # Auto-generate name based on datasets and epochs
+        prefix = _get_series_prefix(datasets, epochs)
+        version = _get_next_series_version(prefix)
+        output_path = MODELS_DIR / f"{prefix}_v{version:03d}.safetensors"
+        meta_path = MODELS_DIR / f"{prefix}_v{version:03d}.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     weights = torch.nn.functional.softplus(model.weights).detach().numpy()
 
+    # Build full metadata for JSON file
+    full_metadata = {
+        "version": version,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "datasets": list(datasets),
+        "dim": dim,
+        "train_accuracy": trained_acc,
+        "baseline_accuracy": baseline_acc,
+        "epochs": epochs,
+        "learning_rate": lr,
+        "margin": margin,
+        "batch_size": batch_size,
+        "num_triplets": len(triplets),
+        "num_equality_constraints": len(equality_constraints) if equality_constraints else 0,
+        "equality_weight": equality_weight if equality_constraints else None,
+        "loss_history": loss_history,
+    }
+
     # Save with safetensors (metadata must be strings)
     tensors = {"weights": model.weights.data}
-    metadata = {
+    safetensors_metadata = {
         "dim": str(dim),
         "train_accuracy": str(trained_acc),
         "baseline_accuracy": str(baseline_acc),
@@ -386,8 +500,22 @@ def main(
         "num_triplets": str(len(triplets)),
         "datasets": ",".join(datasets),
     }
-    save_file(tensors, output_path, metadata=metadata)
+    if version is not None:
+        safetensors_metadata["version"] = str(version)
+    save_file(tensors, output_path, metadata=safetensors_metadata)
+
+    # Save JSON metadata
+    with open(meta_path, "w") as f:
+        json.dump(full_metadata, f, indent=2)
+
     print(f"\nSaved weights to {output_path}")
+    print(f"Saved metadata to {meta_path}")
+
+    # Initialize per-dataset model directories if requested
+    if init:
+        print("\nInitializing dataset model directories...")
+        for dataset in datasets:
+            _init_dataset_model(dataset, output_path, meta_path)
 
     # Print top weighted dimensions
     print("\nTop 10 most important dimensions:")

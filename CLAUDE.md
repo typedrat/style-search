@@ -70,9 +70,15 @@ npm run lint     # ESLint
 ```
 data/
 ├── {dataset}/
-│   ├── chroma/                        # ChromaDB vector store
-│   └── similarity_weights.safetensors # Trained model weights
-└── triplets.db                        # SQLite triplet judgments
+│   └── chroma/                 # ChromaDB vector store
+├── models/
+│   └── {dataset}/
+│       ├── v001.safetensors    # Model weights (version 1)
+│       ├── v001.json           # Training metadata (version 1)
+│       ├── v002.safetensors    # Model weights (version 2)
+│       ├── v002.json           # Training metadata (version 2)
+│       └── ...                 # All versions preserved
+└── triplets.db                 # SQLite triplet judgments
 ```
 
 ## Key Concepts

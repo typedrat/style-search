@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -41,7 +43,7 @@ _triplet_cache: dict[str, list[tuple[str, str, str]]] = {}  # recent triplets fo
 _model_locks: dict[str, threading.Lock] = {}
 
 # Constants
-WEIGHTS_FILENAME = "similarity_weights.safetensors"
+MODELS_DIR = Path("data/models")
 N_CLUSTERS = 30
 WARM_UPDATE_STEPS = 5
 WARM_UPDATE_BATCH_SIZE = 10
@@ -78,9 +80,51 @@ def _get_lock(dataset: str) -> threading.Lock:
     return _model_locks[dataset]
 
 
-def _weights_path(dataset: str) -> Path:
-    """Get the path to the weights file for a dataset."""
-    return Path(f"data/{dataset}/{WEIGHTS_FILENAME}")
+def _models_dir(dataset: str) -> Path:
+    """Get the models directory for a dataset."""
+    return MODELS_DIR / dataset
+
+
+def _get_versions(dataset: str) -> list[int]:
+    """Get all existing version numbers for a dataset, sorted ascending."""
+    models_dir = _models_dir(dataset)
+    if not models_dir.exists():
+        return []
+    versions = []
+    for f in models_dir.glob("v*.safetensors"):
+        try:
+            version = int(f.stem[1:])  # Extract number from "v001"
+            versions.append(version)
+        except ValueError:
+            continue
+    return sorted(versions)
+
+
+def _get_latest_version(dataset: str) -> int | None:
+    """Get the latest version number for a dataset, or None if no versions exist."""
+    versions = _get_versions(dataset)
+    return versions[-1] if versions else None
+
+
+def _get_next_version(dataset: str) -> int:
+    """Get the next version number for a dataset."""
+    latest = _get_latest_version(dataset)
+    return (latest or 0) + 1
+
+
+def _version_path(dataset: str, version: int) -> Path:
+    """Get the path to a specific version's weights file."""
+    return _models_dir(dataset) / f"v{version:03d}.safetensors"
+
+
+def _metadata_path(dataset: str, version: int) -> Path:
+    """Get the path to a specific version's metadata file."""
+    return _models_dir(dataset) / f"v{version:03d}.json"
+
+
+def _legacy_weights_path(dataset: str) -> Path:
+    """Get the legacy weights path for migration."""
+    return Path(f"data/{dataset}/similarity_weights.safetensors")
 
 
 def get_model(dataset: str) -> WeightedDistance:
@@ -139,41 +183,84 @@ def _refresh_anchor_counts(dataset: str) -> None:
 
 
 def load_weights(dataset: str) -> None:
-    """Load weights from disk or initialize a new model."""
+    """Load weights from disk or initialize a new model.
+
+    Loads from data/models/{dataset}/ (latest version).
+    Falls back to legacy location data/{dataset}/similarity_weights.safetensors
+    for migration.
+    """
     embeddings = get_embeddings(dataset)
     dim = len(next(iter(embeddings.values())))
 
-    path = _weights_path(dataset)
-    if path.exists():
+    # Check for versioned weights in new location
+    latest_version = _get_latest_version(dataset)
+    if latest_version is not None:
+        path = _version_path(dataset, latest_version)
         tensors = load_file(path)
         model = WeightedDistance(dim)
         model.weights.data = tensors["weights"]
         _models[dataset] = model
-        print(f"Loaded weights from {path}")
-    else:
-        _models[dataset] = WeightedDistance(dim)
-        print(f"Initialized new model for {dataset} (dim={dim})")
+        print(f"Loaded weights from {path} (v{latest_version:03d})")
+        return
+
+    # Check legacy location for migration
+    legacy_path = _legacy_weights_path(dataset)
+    if legacy_path.exists():
+        tensors = load_file(legacy_path)
+        model = WeightedDistance(dim)
+        model.weights.data = tensors["weights"]
+        _models[dataset] = model
+        print(f"Loaded weights from legacy path {legacy_path}")
+        return
+
+    # No weights found, initialize new model
+    _models[dataset] = WeightedDistance(dim)
+    print(f"Initialized new model for {dataset} (dim={dim})")
 
 
-def save_weights(dataset: str, metadata: dict | None = None) -> None:
-    """Save weights to disk in safetensors format."""
+def save_weights(dataset: str, metadata: dict | None = None) -> int:
+    """Save weights to disk as a new version.
+
+    Saves to data/models/{dataset}/v{NNN}.safetensors with accompanying
+    v{NNN}.json metadata file.
+
+    Returns the version number of the saved model.
+    """
     if dataset not in _models:
         raise ValueError(f"No model loaded for dataset {dataset}")
 
     model = _models[dataset]
-    path = _weights_path(dataset)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    version = _get_next_version(dataset)
+    weights_path = _version_path(dataset, version)
+    meta_path = _metadata_path(dataset, version)
 
+    # Ensure directory exists
+    weights_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Build full metadata for JSON file
+    full_metadata = {
+        "version": version,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "dataset": dataset,
+    }
+    if metadata:
+        full_metadata.update(metadata)
+
+    # Save safetensors with basic metadata (string values only)
     tensors = {"weights": model.weights.data}
-
-    # Build metadata dict (safetensors requires string values)
-    meta = {}
+    safetensors_meta = {}
     if metadata:
         for key, value in metadata.items():
-            meta[key] = str(value)
+            safetensors_meta[key] = str(value)
+    safetensors_meta["version"] = str(version)
+    save_file(tensors, weights_path, metadata=safetensors_meta)
 
-    save_file(tensors, path, metadata=meta)
-    print(f"Saved weights to {path}")
+    # Save JSON metadata
+    with open(meta_path, "w") as f:
+        json.dump(full_metadata, f, indent=2)
+
+    print(f"Saved weights to {weights_path} (v{version:03d})")
+    return version
 
 
 def warm_update(dataset: str, triplet: tuple[str, str, str]) -> None:
@@ -265,7 +352,7 @@ def full_retrain(dataset: str) -> dict:
         triplet_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 
         # Train
-        train(model, triplet_loader, epochs=100, lr=0.01, margin=0.2)
+        loss_history = train(model, triplet_loader, epochs=100, lr=0.01, margin=0.2)
 
         # Evaluate
         train_acc = evaluate(model, triplets, embeddings)
@@ -273,14 +360,19 @@ def full_retrain(dataset: str) -> dict:
         # Update in-memory model
         _models[dataset] = model
 
-        # Save weights
-        save_weights(
+        # Save weights with training metadata
+        version = save_weights(
             dataset,
             metadata={
                 "dim": dim,
                 "train_accuracy": train_acc,
                 "baseline_accuracy": baseline_acc,
                 "num_triplets": len(triplets),
+                "epochs": 100,
+                "learning_rate": 0.01,
+                "margin": 0.2,
+                "batch_size": 32,
+                "loss_history": loss_history,
             },
         )
 
@@ -288,6 +380,7 @@ def full_retrain(dataset: str) -> dict:
         _triplet_cache[dataset] = []
 
         return {
+            "version": version,
             "train_accuracy": train_acc,
             "baseline_accuracy": baseline_acc,
             "improvement": train_acc - baseline_acc,
@@ -411,8 +504,15 @@ def _cluster_diversity(
 
 def get_model_status(dataset: str) -> ModelStatus:
     """Get the status of the model for a dataset."""
-    path = _weights_path(dataset)
-    weights_exist = path.exists()
+    latest_version = _get_latest_version(dataset)
+    weights_exist = latest_version is not None
+    path = _version_path(dataset, latest_version) if latest_version else None
+
+    # Also check legacy location
+    legacy_path = _legacy_weights_path(dataset)
+    if not weights_exist and legacy_path.exists():
+        weights_exist = True
+        path = legacy_path
 
     # Count triplets
     db_path = Path("data/triplets.db")
@@ -434,25 +534,38 @@ def get_model_status(dataset: str) -> ModelStatus:
     if loaded:
         dim = _models[dataset].weights.shape[0]
 
-    if weights_exist:
-        # Read metadata from safetensors
-        try:
-            from safetensors import safe_open
+    if weights_exist and path:
+        # Try reading JSON metadata first (for versioned models)
+        if latest_version is not None:
+            meta_path = _metadata_path(dataset, latest_version)
+            if meta_path.exists():
+                try:
+                    with open(meta_path) as f:
+                        metadata = json.load(f)
+                        dim = metadata.get("dim") or dim
+                        train_accuracy = metadata.get("train_accuracy")
+                except Exception:
+                    pass
 
-            with safe_open(path, framework="pt") as f:
-                metadata = f.metadata()
-                if metadata:
-                    dim = int(metadata.get("dim", 0)) or dim
-                    train_accuracy = float(metadata.get("train_accuracy", 0)) or None
-        except Exception:
-            pass
+        # Fall back to safetensors metadata
+        if dim is None or train_accuracy is None:
+            try:
+                from safetensors import safe_open
+
+                with safe_open(path, framework="pt") as f:
+                    metadata = f.metadata()
+                    if metadata:
+                        dim = int(metadata.get("dim", 0)) or dim
+                        train_accuracy = float(metadata.get("train_accuracy", 0)) or None
+            except Exception:
+                pass
 
     return ModelStatus(
         loaded=loaded,
         dim=dim,
         num_triplets=num_triplets,
         train_accuracy=train_accuracy,
-        weights_path=str(path) if weights_exist else None,
+        weights_path=str(path) if weights_exist and path else None,
         weights_exist=weights_exist,
     )
 
