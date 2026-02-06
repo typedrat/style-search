@@ -31,7 +31,7 @@ let
       --service-type=exec \
       ${lib.concatStringsSep " \\\n      " (lib.mapAttrsToList (k: v: "--property=${k}=${valueToString v}") serviceConfigProps)} \
       ${lib.concatStringsSep " \\\n      " (lib.mapAttrsToList (k: v: "--property=Environment=${k}=${toString v}") serviceCfg.environment)} \
-      ${cfg.package}/bin/style-api "$@"
+      ${cfg.package}/bin/style-cli "$@"
   '';
 in
 {
@@ -85,7 +85,7 @@ in
 
       serviceConfig = {
         Type = "simple";
-        ExecStart = "${cfg.package}/bin/style-api serve -h ${cfg.host} -p ${toString cfg.port}";
+        ExecStart = "${cfg.package}/bin/style-api -h ${cfg.host} -p ${toString cfg.port}";
         WorkingDirectory = cfg.dataDir;
         StateDirectory = "style-search";
         DynamicUser = true;
