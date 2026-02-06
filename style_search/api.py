@@ -222,7 +222,9 @@ def list_datasets() -> list[str]:
         return []
     return [
         d.name for d in DATA_DIR.iterdir()
-        if d.is_dir() and (d / "chroma").exists()
+        if d.is_dir()
+        and not d.name.startswith(".")
+        and (d / "chroma" / "chroma.sqlite3").is_file()
     ]
 
 
