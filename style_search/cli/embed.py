@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate embeddings for scraped doomp images using EVA02-CLIP and store in ChromaDB."""
+"""Generate EVA02-CLIP embeddings and store in ChromaDB."""
 
 import json
 import os
@@ -7,22 +7,23 @@ import signal
 import sys
 import time
 from pathlib import Path
+from typing import ClassVar
 
 import chromadb
 import click
 import torch
 from PIL import Image
 from rich.console import Console
+from rich.panel import Panel
 from rich.progress import (
+    BarColumn,
     Progress,
     SpinnerColumn,
-    TextColumn,
-    BarColumn,
     TaskProgressColumn,
+    TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
-from rich.panel import Panel
 from rich.table import Table
 
 console = Console()
@@ -40,13 +41,17 @@ class EVA02EmbeddingFunction:
     """Custom embedding function for EVA02-CLIP using open_clip."""
 
     # Map friendly names to open_clip model names and pretrained weights
-    MODELS = {
+    MODELS: ClassVar[dict[str, tuple[str, str]]] = {
         "EVA02-CLIP-L-14": ("EVA02-L-14", "merged2b_s4b_b131k"),
         "EVA02-CLIP-bigE-14": ("EVA02-E-14", "laion2b_s4b_b115k"),
         "EVA02-CLIP-bigE-14-plus": ("EVA02-E-14-plus", "laion2b_s9b_b144k"),
     }
 
-    def __init__(self, model_name: str = "EVA02-CLIP-bigE-14-plus", device: str = "cuda"):
+    def __init__(
+        self,
+        model_name: str = "EVA02-CLIP-bigE-14-plus",
+        device: str = "cuda",
+    ):
         import open_clip
 
         self.device = device
@@ -63,19 +68,44 @@ class EVA02EmbeddingFunction:
 
     def __call__(self, images: list[Image.Image]) -> list[list[float]]:
         with torch.no_grad():
-            image_tensors = torch.stack([self.preprocess(img) for img in images]).to(self.device).half()
+            image_tensors = (
+                torch.stack([self.preprocess(img) for img in images])
+                .to(self.device)
+                .half()
+            )
             features = self.model.encode_image(image_tensors)
             features = features / features.norm(dim=-1, keepdim=True)
             return features.float().cpu().tolist()
 
 
 @click.command()
-@click.argument("input_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option("-d", "--db-path", type=click.Path(path_type=Path), help="ChromaDB path (default: INPUT_DIR/chroma)")
-@click.option("-m", "--model", type=click.Choice(["large", "big", "big-plus"]), default="big-plus", help="Model variant")
-@click.option("-b", "--batch-size", default=16, help="Batch size for inference")
+@click.argument(
+    "input_dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option(
+    "-d", "--db-path",
+    type=click.Path(path_type=Path),
+    help="ChromaDB path (default: INPUT_DIR/chroma)",
+)
+@click.option(
+    "-m", "--model",
+    type=click.Choice(["large", "big", "big-plus"]),
+    default="big-plus",
+    help="Model variant",
+)
+@click.option(
+    "-b", "--batch-size", default=16,
+    help="Batch size for inference",
+)
 @click.option("--reset", is_flag=True, help="Reset existing collection")
-def embed(input_dir: Path, db_path: Path | None, model: str, batch_size: int, reset: bool):
+def embed(
+    input_dir: Path,
+    db_path: Path | None,
+    model: str,
+    batch_size: int,
+    reset: bool,
+):
     """Generate EVA02-CLIP embeddings for images and store in ChromaDB."""
     global cancelled
     signal.signal(signal.SIGINT, handle_sigint)
@@ -146,7 +176,8 @@ def embed(input_dir: Path, db_path: Path | None, model: str, batch_size: int, re
         console.print("[green]All images already embedded![/green]")
         return
 
-    console.print(f"[dim]Skipping {len(image_files) - len(to_embed)} already embedded[/dim]")
+    n_skip = len(image_files) - len(to_embed)
+    console.print(f"[dim]Skipping {n_skip} already embedded[/dim]")
 
     # Load model
     with console.status("[bold cyan]Loading EVA02-CLIP model..."):

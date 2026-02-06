@@ -54,10 +54,10 @@ if not logger.handlers:
 # In-memory state (per dataset)
 _models: dict[str, WeightedDistance] = {}
 _embeddings: dict[str, dict[str, NDArray[np.floating]]] = {}
-_clusters: dict[str, NDArray[np.integer]] = {}  # artist_id -> cluster_id mapping as array
+_clusters: dict[str, NDArray[np.integer]] = {}  # cluster_id mapping
 _cluster_labels: dict[str, dict[str, int]] = {}  # dataset -> {artist_id: cluster_id}
 _anchor_counts: dict[str, dict[str, int]] = {}  # dataset -> {artist_id: count}
-_triplet_cache: dict[str, list[tuple[str, str, str]]] = {}  # recent triplets for warm updates
+_triplet_cache: dict[str, list[tuple[str, str, str]]] = {}  # warm updates
 
 # Lock for thread-safe model updates
 _model_locks: dict[str, threading.Lock] = {}
@@ -172,7 +172,10 @@ def get_clusters(dataset: str) -> dict[str, int]:
         kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
         labels = kmeans.fit_predict(X)
 
-        _cluster_labels[dataset] = {id_: int(label) for id_, label in zip(ids, labels)}
+        _cluster_labels[dataset] = {
+            id_: int(label)
+            for id_, label in zip(ids, labels, strict=True)
+        }
 
     return _cluster_labels[dataset]
 
@@ -193,7 +196,8 @@ def _refresh_anchor_counts(dataset: str) -> None:
 
     conn = sqlite3.connect(db_path)
     rows = conn.execute(
-        "SELECT anchor, COUNT(*) as count FROM triplets WHERE dataset = ? GROUP BY anchor",
+        "SELECT anchor, COUNT(*) as count FROM triplets"
+        " WHERE dataset = ? GROUP BY anchor",
         (dataset,),
     ).fetchall()
     conn.close()
@@ -323,15 +327,15 @@ def warm_update(dataset: str, triplet: tuple[str, str, str]) -> None:
             return
 
         # Prepare tensors
-        anchors = torch.stack(
-            [torch.tensor(embeddings[t[0]], dtype=torch.float32) for t in valid_triplets]
-        )
-        positives = torch.stack(
-            [torch.tensor(embeddings[t[1]], dtype=torch.float32) for t in valid_triplets]
-        )
-        negatives = torch.stack(
-            [torch.tensor(embeddings[t[2]], dtype=torch.float32) for t in valid_triplets]
-        )
+        def _to_tensor(idx: int) -> torch.Tensor:
+            return torch.stack([
+                torch.tensor(embeddings[t[idx]], dtype=torch.float32)
+                for t in valid_triplets
+            ])
+
+        anchors = _to_tensor(0)
+        positives = _to_tensor(1)
+        negatives = _to_tensor(2)
 
         # Run a few gradient steps
         optimizer = optim.Adam(model.parameters(), lr=0.001)
@@ -386,7 +390,11 @@ def full_retrain(dataset: str) -> dict:
 
         # Train
         logger.info(f"Full retrain [{dataset}]: training on {len(triplets)} triplets")
-        loss_history = train(model, triplet_loader, epochs=100, lr=0.01, margin=0.2, l2_weight=0.01)
+        loss_history = train(
+            model, triplet_loader,
+            epochs=100, lr=0.01, margin=0.2,
+            l2_weight=0.01,
+        )
 
         # Evaluate
         train_acc = evaluate(model, triplets, embeddings)
@@ -416,7 +424,8 @@ def full_retrain(dataset: str) -> dict:
 
         logger.info(
             f"Full retrain [{dataset}]: complete v{version:03d} | "
-            f"accuracy {baseline_acc:.1%} -> {train_acc:.1%} (+{train_acc - baseline_acc:.1%})"
+            f"accuracy {baseline_acc:.1%} -> {train_acc:.1%}"
+            f" (+{train_acc - baseline_acc:.1%})"
         )
 
         return {
@@ -464,7 +473,9 @@ def suggest_triplet(dataset: str, n_candidates: int = 100) -> SuggestedTriplet:
     with torch.no_grad():
         for anchor, a, b in candidates:
             # Get embeddings as tensors
-            e_anchor = torch.tensor(embeddings[anchor], dtype=torch.float32).unsqueeze(0)
+            e_anchor = torch.tensor(
+                embeddings[anchor], dtype=torch.float32,
+            ).unsqueeze(0)
             e_a = torch.tensor(embeddings[a], dtype=torch.float32).unsqueeze(0)
             e_b = torch.tensor(embeddings[b], dtype=torch.float32).unsqueeze(0)
 
@@ -499,17 +510,25 @@ def suggest_triplet(dataset: str, n_candidates: int = 100) -> SuggestedTriplet:
 
         logger.info(
             f"Active learning [{dataset}]: sampled {n_candidates} candidates | "
-            f"uncertainty: mean={uncertainties.mean():.3f}, max={uncertainties.max():.3f} | "
-            f"diversity: mean={diversities.mean():.3f}, max={diversities.max():.3f} | "
-            f"selected: uncertainty={best_uncertainty:.3f}, diversity={best_diversity:.3f}, "
-            f"score={best_score:.3f} (rank={int((scores < best_score).sum())+1}/{len(scores)})"
+            f"uncertainty: mean={uncertainties.mean():.3f},"
+            f" max={uncertainties.max():.3f} | "
+            f"diversity: mean={diversities.mean():.3f},"
+            f" max={diversities.max():.3f} | "
+            f"selected: unc={best_uncertainty:.3f},"
+            f" div={best_diversity:.3f},"
+            f" score={best_score:.3f}"
+            f" (rank={int((scores < best_score).sum()) + 1}"
+            f"/{len(scores)})"
         )
 
     if best_triplet is None:
         # Fallback to random
         import random
 
-        logger.warning(f"Active learning [{dataset}]: no valid candidates, falling back to random")
+        logger.warning(
+            f"Active learning [{dataset}]:"
+            " no valid candidates, falling back to random"
+        )
         anchor = random.choice(ids)
         a = random.choice([x for x in ids if x != anchor])
         b = random.choice([x for x in ids if x != anchor and x != a])
@@ -620,7 +639,10 @@ def get_model_status(dataset: str) -> ModelStatus:
                     metadata = f.metadata()
                     if metadata:
                         dim = int(metadata.get("dim", 0)) or dim
-                        train_accuracy = float(metadata.get("train_accuracy", 0)) or None
+                        train_accuracy = (
+                            float(metadata.get("train_accuracy", 0))
+                            or None
+                        )
             except Exception:
                 pass
 

@@ -8,35 +8,35 @@ import signal
 import string
 import sys
 import time
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from urllib.parse import urlparse
-
-# Global flag for cancellation
-cancelled = False
-
-
-def handle_sigint(signum, frame):
-    global cancelled
-    cancelled = True
-
-DEFAULT_WORKERS = os.cpu_count() or 4
 
 import click
 import requests
 from bs4 import BeautifulSoup
 from rich.console import Console
+from rich.panel import Panel
 from rich.progress import (
+    BarColumn,
     Progress,
     SpinnerColumn,
-    TextColumn,
-    BarColumn,
     TaskProgressColumn,
+    TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
 from rich.table import Table
-from rich.panel import Panel
+
+# Global flag for cancellation
+cancelled = False
+
+DEFAULT_WORKERS = os.cpu_count() or 4
+
+
+def handle_sigint(signum, frame):
+    global cancelled
+    cancelled = True
 
 console = Console()
 
@@ -95,7 +95,8 @@ def extract_artist_data(html: str) -> dict[str, dict]:
         while prev:
             if prev.find("img") and prev.get("href"):
                 href = prev["href"]
-                if any(href.lower().endswith(ext) for ext in ('.jpg', '.jpeg', '.png', '.gif', '.webp')):
+                exts = ('.jpg', '.jpeg', '.png', '.gif', '.webp')
+                if any(href.lower().endswith(ext) for ext in exts):
                     entry["image_url"] = href
                     break
             prev = prev.find_previous("a")
@@ -132,7 +133,9 @@ def get_extension(url: str) -> str:
     return '.jpg'
 
 
-def download_image(artist: str, url: str, output_dir: Path) -> tuple[str, bool | None, str, int]:
+def download_image(
+    artist: str, url: str, output_dir: Path,
+) -> tuple[str, bool | None, str, int]:
     """Download a single image. Returns (artist, success, message, bytes)."""
     try:
         safe_name = re.sub(r'[<>:"/\\|?*]', '_', artist)
@@ -160,7 +163,10 @@ def download_image(artist: str, url: str, output_dir: Path) -> tuple[str, bool |
 @click.command()
 @click.argument("url")
 @click.option("-o", "--output", default="data/doomp", help="Output directory")
-@click.option("-w", "--workers", default=DEFAULT_WORKERS, show_default=True, help="Parallel workers")
+@click.option(
+    "-w", "--workers", default=DEFAULT_WORKERS,
+    show_default=True, help="Parallel workers",
+)
 def scrape(url: str, output: str, workers: int):
     """Scrape images from a rentry.org doomp (A-Z subpages)."""
     global cancelled
@@ -169,14 +175,19 @@ def scrape(url: str, output: str, workers: int):
     output_dir = Path(output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    console.print(Panel(f"[bold]Doomp Scraper[/bold]\n{url}", subtitle=f"Output: {output_dir.absolute()}"))
+    console.print(Panel(
+        f"[bold]Doomp Scraper[/bold]\n{url}",
+        subtitle=f"Output: {output_dir.absolute()}",
+    ))
 
     # Fetch all pages in parallel
     page_urls = get_all_page_urls(url)
     all_artists = {}
     settings = {}
 
-    def fetch_and_parse(page_url: str) -> tuple[str, dict | None, dict | None, str | None]:
+    def fetch_and_parse(
+        page_url: str,
+    ) -> tuple[str, dict | None, dict | None, str | None]:
         """Fetch a page and extract data. Returns (letter, settings, artists, error)."""
         letter = page_url.split("-")[-1] if "-" in page_url.split("/")[-1] else "A"
         if letter == "doomp":
@@ -223,7 +234,10 @@ def scrape(url: str, output: str, workers: int):
 
                 progress.advance(fetch_task)
 
-    console.print(f"\n[green]Found {len(all_artists)} artists across {len(page_urls)} pages[/green]")
+    console.print(
+        f"\n[green]Found {len(all_artists)} artists"
+        f" across {len(page_urls)} pages[/green]"
+    )
 
     # Show settings table
     if settings:
@@ -281,7 +295,10 @@ def scrape(url: str, output: str, workers: int):
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
-                executor.submit(download_image, artist, data["image_url"], output_dir): artist
+                executor.submit(
+                    download_image, artist,
+                    data["image_url"], output_dir,
+                ): artist
                 for artist, data in all_artists.items()
             }
 

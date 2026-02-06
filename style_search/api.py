@@ -107,11 +107,17 @@ class TripletResponse(BaseModel):
 
 
 def validate_user(token: str | None) -> str | None:
-    """Validate a user token against the allowlist. Returns token if valid, None if no auth required."""
+    """Validate a user token against the allowlist.
+
+    Returns token if valid, None if no auth required.
+    """
     if token is None:
         return None
     with get_db() as conn:
-        row = conn.execute("SELECT token FROM users WHERE token = ?", (token,)).fetchone()
+        row = conn.execute(
+            "SELECT token FROM users WHERE token = ?",
+            (token,),
+        ).fetchone()
         if not row:
             raise HTTPException(403, "Invalid user token")
         return token
@@ -202,7 +208,9 @@ def get_all_embeddings(dataset: str) -> dict[str, list[float]]:
     results = collection.get(include=["embeddings"])
     return {
         id_: emb
-        for id_, emb in zip(results["ids"], results["embeddings"])
+        for id_, emb in zip(
+            results["ids"], results["embeddings"], strict=True
+        )
     }
 
 
@@ -259,12 +267,18 @@ def get_distances_from(dataset: str, artist_id: str) -> dict[str, float]:
 
     return {
         id_: dist
-        for id_, dist in zip(results["ids"][0], results["distances"][0])
+        for id_, dist in zip(
+            results["ids"][0], results["distances"][0], strict=True
+        )
     }
 
 
 @app.get("/api/datasets/{dataset}/umap")
-def get_umap_projection(dataset: str, n_neighbors: int = 15, min_dist: float = 0.1) -> dict[str, list[float]]:
+def get_umap_projection(
+    dataset: str,
+    n_neighbors: int = 15,
+    min_dist: float = 0.1,
+) -> dict[str, list[float]]:
     """Get 2D UMAP projection of embeddings."""
     import numpy as np
     from umap import UMAP
@@ -280,7 +294,7 @@ def get_umap_projection(dataset: str, n_neighbors: int = 15, min_dist: float = 0
 
     return {
         id_: coord.tolist()
-        for id_, coord in zip(ids, coords)
+        for id_, coord in zip(ids, coords, strict=True)
     }
 
 
@@ -307,7 +321,9 @@ def get_artist_image(dataset: str, artist_id: str):
 
 
 @app.post("/api/triplets")
-def create_triplet(triplet: TripletCreate, background_tasks: BackgroundTasks) -> TripletResponse:
+def create_triplet(
+    triplet: TripletCreate, background_tasks: BackgroundTasks
+) -> TripletResponse:
     """Store a new triplet judgment."""
     # Validate user if provided
     user_id = validate_user(triplet.user_id)
@@ -315,10 +331,18 @@ def create_triplet(triplet: TripletCreate, background_tasks: BackgroundTasks) ->
     with get_db() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO triplets (dataset, anchor, option_a, option_b, choice, skip_reason, user_id, timestamp)
+            INSERT INTO triplets (
+                dataset, anchor, option_a, option_b,
+                choice, skip_reason, user_id, timestamp
+            )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (triplet.dataset, triplet.anchor, triplet.option_a, triplet.option_b, triplet.choice, triplet.skip_reason, user_id, triplet.timestamp),
+            (
+                triplet.dataset, triplet.anchor,
+                triplet.option_a, triplet.option_b,
+                triplet.choice, triplet.skip_reason,
+                user_id, triplet.timestamp,
+            ),
         )
         conn.commit()
         triplet_id = cursor.lastrowid
@@ -344,9 +368,20 @@ def create_triplet(triplet: TripletCreate, background_tasks: BackgroundTasks) ->
             )
 
             # Trigger full retrain every FULL_RETRAIN_INTERVAL triplets
-            if triplet_count > 0 and triplet_count % similarity.FULL_RETRAIN_INTERVAL == 0:
-                background_tasks.add_task(similarity.full_retrain, triplet.dataset)
-                print(f"Queued background retrain for {triplet.dataset} (triplet #{triplet_count})")
+            retrain_due = (
+                triplet_count > 0
+                and triplet_count
+                % similarity.FULL_RETRAIN_INTERVAL == 0
+            )
+            if retrain_due:
+                background_tasks.add_task(
+                    similarity.full_retrain, triplet.dataset,
+                )
+                print(
+                    f"Queued background retrain for"
+                    f" {triplet.dataset}"
+                    f" (triplet #{triplet_count})"
+                )
         except Exception as e:
             # Log but don't fail the request
             print(f"Warm update failed: {e}")
@@ -365,7 +400,9 @@ def create_triplet(triplet: TripletCreate, background_tasks: BackgroundTasks) ->
 
 
 @app.get("/api/triplets")
-def get_triplets(dataset: str | None = None, user: str | None = None) -> list[TripletResponse]:
+def get_triplets(
+    dataset: str | None = None, user: str | None = None
+) -> list[TripletResponse]:
     """Get triplets, filtered by dataset and/or user."""
     # Validate user if provided
     user_id = validate_user(user)
@@ -418,7 +455,10 @@ def update_triplet(triplet_id: int, update: TripletUpdate) -> TripletResponse:
 
     with get_db() as conn:
         # Check if triplet exists
-        row = conn.execute("SELECT * FROM triplets WHERE id = ?", (triplet_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM triplets WHERE id = ?",
+            (triplet_id,),
+        ).fetchone()
         if not row:
             raise HTTPException(404, f"Triplet {triplet_id} not found")
 
@@ -432,7 +472,10 @@ def update_triplet(triplet_id: int, update: TripletUpdate) -> TripletResponse:
         )
         conn.commit()
 
-        row = conn.execute("SELECT * FROM triplets WHERE id = ?", (triplet_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM triplets WHERE id = ?",
+            (triplet_id,),
+        ).fetchone()
         return TripletResponse(
             id=row["id"],
             dataset=row["dataset"],
@@ -455,7 +498,10 @@ def delete_triplet(triplet_id: int, user: str | None = None):
     with get_db() as conn:
         # Check ownership if user_id provided
         if user_id:
-            row = conn.execute("SELECT user_id FROM triplets WHERE id = ?", (triplet_id,)).fetchone()
+            row = conn.execute(
+                "SELECT user_id FROM triplets WHERE id = ?",
+                (triplet_id,),
+            ).fetchone()
             if row and row["user_id"] != user_id:
                 raise HTTPException(403, "You can only delete your own triplets")
 
@@ -482,7 +528,9 @@ def suggest_triplet(dataset: str) -> SuggestedTripletResponse:
             diversity_score=suggested.diversity_score,
         )
     except Exception as e:
-        raise HTTPException(500, f"Failed to suggest triplet: {e}")
+        raise HTTPException(
+            500, f"Failed to suggest triplet: {e}",
+        ) from e
 
 
 @app.post("/api/datasets/{dataset}/retrain")
@@ -496,7 +544,9 @@ def retrain_model(dataset: str, background_tasks: BackgroundTasks) -> RetrainRes
         result = similarity.full_retrain(dataset)
         return RetrainResponse(**result)
     except Exception as e:
-        raise HTTPException(500, f"Failed to retrain model: {e}")
+        raise HTTPException(
+            500, f"Failed to retrain model: {e}",
+        ) from e
 
 
 @app.get("/api/datasets/{dataset}/model-status")
@@ -516,7 +566,9 @@ def get_model_status(dataset: str) -> ModelStatusResponse:
             weights_exist=status.weights_exist,
         )
     except Exception as e:
-        raise HTTPException(500, f"Failed to get model status: {e}")
+        raise HTTPException(
+            500, f"Failed to get model status: {e}",
+        ) from e
 
 
 class UserResponse(BaseModel):
@@ -528,7 +580,10 @@ class UserResponse(BaseModel):
 def get_current_user(user: str = Query(..., description="User token")) -> UserResponse:
     """Verify a user token and return user info."""
     with get_db() as conn:
-        row = conn.execute("SELECT token, name FROM users WHERE token = ?", (user,)).fetchone()
+        row = conn.execute(
+            "SELECT token, name FROM users WHERE token = ?",
+            (user,),
+        ).fetchone()
         if not row:
             raise HTTPException(403, "Invalid user token")
         return UserResponse(token=row["token"], name=row["name"])

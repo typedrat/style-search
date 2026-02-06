@@ -3,6 +3,7 @@
 
 import json
 from pathlib import Path
+from typing import ClassVar
 
 import click
 from rich import box
@@ -119,7 +120,10 @@ def display_model(path: Path, console: Console, as_json: bool = False) -> None:
             for key, value in group_items:
                 table.add_row(f"  {key}", format_value(key, value))
 
-    remaining = [(k, v) for k, v in meta.items() if k not in seen and k != "loss_history"]
+    remaining = [
+        (k, v) for k, v in meta.items()
+        if k not in seen and k != "loss_history"
+    ]
     if remaining:
         table.add_row("[bold]Other[/bold]", "")
         for key, value in sorted(remaining):
@@ -152,13 +156,12 @@ def discover_models() -> list[tuple[str, Path]]:
 
 def run_browser() -> None:
     """Run the interactive TUI browser."""
-    from textual.app import App, ComposeResult
-    from textual.binding import Binding
-    from textual.containers import Horizontal, Vertical, VerticalScroll
-    from textual.widgets import Footer, Header, ListItem, ListView, Static
-
     from rich.panel import Panel
     from rich.table import Table
+    from textual.app import App, ComposeResult
+    from textual.binding import Binding
+    from textual.containers import Horizontal, Vertical
+    from textual.widgets import Footer, Header, ListItem, ListView, Static
 
     class ModelDetails(Static):
         """Widget to display model details."""
@@ -239,7 +242,7 @@ def run_browser() -> None:
         }
         """
 
-        BINDINGS = [
+        BINDINGS: ClassVar[list[Binding]] = [
             Binding("q", "quit", "Quit"),
             Binding("j", "cursor_down", "Down", show=False),
             Binding("k", "cursor_up", "Up", show=False),
@@ -258,7 +261,10 @@ def run_browser() -> None:
                         # Get accuracy for display
                         try:
                             meta = load_metadata(path)
-                            acc = meta.get("test_accuracy") or meta.get("train_accuracy")
+                            acc = (
+                                meta.get("test_accuracy")
+                                or meta.get("train_accuracy")
+                            )
                             acc_str = f" ({acc:.0%})" if acc else ""
                         except Exception:
                             acc_str = ""
