@@ -655,9 +655,13 @@ def add_user(name: str):
         conn.execute("INSERT INTO users (token, name) VALUES (?, ?)", (token, name))
         conn.commit()
 
+    domain = os.environ.get("STYLE_SEARCH_DOMAIN")
+    protocol = os.environ.get("STYLE_SEARCH_PROTOCOL", "https")
+
     print(f"Created user '{name}'")
     print(f"Token: {token}")
-    print(f"Share URL: https://your-domain.com/?user={token}")
+    if domain:
+        print(f"Share URL: {protocol}://{domain}/?user={token}")
 
 
 @cli.command()

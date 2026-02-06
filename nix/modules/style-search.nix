@@ -61,6 +61,18 @@ in
       default = "/var/lib/style-search";
       description = "Directory for data storage";
     };
+
+    domain = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Public domain name, used for generating share URLs";
+    };
+
+    protocol = lib.mkOption {
+      type = lib.types.enum [ "https" "http" ];
+      default = "https";
+      description = "Protocol for generated share URLs";
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -82,6 +94,9 @@ in
 
       environment = {
         STYLE_SEARCH_DATA_DIR = cfg.dataDir;
+      } // lib.optionalAttrs (cfg.domain != null) {
+        STYLE_SEARCH_DOMAIN = cfg.domain;
+        STYLE_SEARCH_PROTOCOL = cfg.protocol;
       };
     };
   };
