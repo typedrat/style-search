@@ -689,6 +689,30 @@ def list_users():
 
 
 @cli.command()
+@click.argument("name")
+@click.option("--show-token", is_flag=True, help="Show the full token")
+def get_user(name: str, show_token: bool):
+    """Show details for a user by name."""
+    with get_db() as conn:
+        row = conn.execute("""
+            SELECT u.token, u.name, u.created_at,
+                   COUNT(t.id) as total_triplets,
+                   SUM(CASE WHEN t.choice IS NOT NULL THEN 1 ELSE 0 END) as judgments,
+                   SUM(CASE WHEN t.choice IS NULL THEN 1 ELSE 0 END) as skips
+            FROM users u
+            LEFT JOIN triplets t ON u.token = t.user_id
+            WHERE u.name = ?
+            GROUP BY u.token
+        """, (name,)).fetchone()
+        if not row:
+            print(f"User not found: {name}")
+            raise SystemExit(1)
+        token = row["token"] if show_token else f"{row['token'][:16]}..."
+        stats = f"{row['total_triplets']} triplets ({row['judgments']} judgments, {row['skips']} skips)"
+        print(f"{row['name']}: {token} | {stats} | created {row['created_at']}")
+
+
+@cli.command()
 @click.argument("token")
 def remove_user(token: str):
     """Remove a user from the allowlist."""
