@@ -156,12 +156,12 @@ def load_embeddings(dataset: str) -> dict[str, np.ndarray]:
     client = chromadb.PersistentClient(path=str(chroma_path))
     collection = client.get_collection(dataset)
     results = collection.get(include=["embeddings"])
+    embeddings = results["embeddings"]
+    assert embeddings is not None
 
     return {
         id_: np.array(emb)
-        for id_, emb in zip(
-            results["ids"], results["embeddings"], strict=True
-        )
+        for id_, emb in zip(results["ids"], embeddings, strict=True)
     }
 
 

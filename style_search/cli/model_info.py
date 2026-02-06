@@ -242,7 +242,7 @@ def run_browser() -> None:
         }
         """
 
-        BINDINGS: ClassVar[list[Binding]] = [
+        BINDINGS: ClassVar[list[Binding]] = [  # pyright: ignore[reportIncompatibleVariableOverride]
             Binding("q", "quit", "Quit"),
             Binding("j", "cursor_down", "Down", show=False),
             Binding("k", "cursor_up", "Up", show=False),
@@ -275,7 +275,7 @@ def run_browser() -> None:
                             display = "..." + display[-32:]
 
                         item = ListItem(Static(f"{display}{acc_str}"))
-                        item.data = path  # Store path for later
+                        item.data = path  # pyright: ignore[reportAttributeAccessIssue]
                         items.append(item)
 
                     yield ListView(*items, id="list")
@@ -289,14 +289,14 @@ def run_browser() -> None:
 
         def on_list_view_selected(self, event: ListView.Selected) -> None:
             """Handle model selection."""
-            path = event.item.data
+            path = event.item.data  # pyright: ignore[reportAttributeAccessIssue]
             if path:
                 self.query_one(ModelDetails).show_model(path)
 
         def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
             """Handle model highlight (cursor movement)."""
             if event.item and hasattr(event.item, "data"):
-                path = event.item.data
+                path = event.item.data  # pyright: ignore[reportAttributeAccessIssue]
                 if path:
                     self.query_one(ModelDetails).show_model(path)
 

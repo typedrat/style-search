@@ -61,7 +61,7 @@ app.add_middleware(
 )
 
 # Global state for loaded collections
-_clients: dict[str, chromadb.PersistentClient] = {}
+_clients: dict[str, chromadb.PersistentClient] = {}  # pyright: ignore[reportGeneralTypeIssues]
 _collections: dict[str, chromadb.Collection] = {}
 
 
@@ -195,7 +195,7 @@ def get_all_artists(dataset: str) -> list[ArtistResult]:
     for i, id_ in enumerate(results["ids"]):
         artists.append(ArtistResult(
             id=id_,
-            metadata=results["metadatas"][i] if results["metadatas"] else {},
+            metadata=results["metadatas"][i] if results["metadatas"] else {},  # pyright: ignore[reportArgumentType]
             uri=results["uris"][i] if results["uris"] else None,
         ))
     return artists
@@ -206,11 +206,11 @@ def get_all_embeddings(dataset: str) -> dict[str, list[float]]:
     """Get all embeddings for UMAP projection."""
     collection = get_collection(dataset)
     results = collection.get(include=["embeddings"])
-    return {
+    embeddings = results["embeddings"]
+    assert embeddings is not None
+    return {  # pyright: ignore[reportReturnType]
         id_: emb
-        for id_, emb in zip(
-            results["ids"], results["embeddings"], strict=True
-        )
+        for id_, emb in zip(results["ids"], embeddings, strict=True)
     }
 
 
@@ -224,11 +224,13 @@ def find_similar(dataset: str, query: SimilarityQuery) -> list[ArtistResult]:
     if not query_result["ids"]:
         raise HTTPException(404, f"Artist '{query.artist_id}' not found")
 
-    query_embedding = query_result["embeddings"][0]
+    embeddings = query_result["embeddings"]
+    assert embeddings is not None
+    query_embedding = embeddings[0]
 
     # Query for similar
     results = collection.query(
-        query_embeddings=[query_embedding],
+        query_embeddings=[query_embedding],  # pyright: ignore[reportArgumentType]
         n_results=query.n_results + 1,  # +1 because it includes itself
         include=["metadatas", "uris", "distances"],
     )
@@ -240,7 +242,7 @@ def find_similar(dataset: str, query: SimilarityQuery) -> list[ArtistResult]:
         artists.append(ArtistResult(
             id=id_,
             distance=results["distances"][0][i] if results["distances"] else None,
-            metadata=results["metadatas"][0][i] if results["metadatas"] else {},
+            metadata=results["metadatas"][0][i] if results["metadatas"] else {},  # pyright: ignore[reportArgumentType]
             uri=results["uris"][0][i] if results["uris"] else None,
         ))
     return artists[:query.n_results]
@@ -256,19 +258,23 @@ def get_distances_from(dataset: str, artist_id: str) -> dict[str, float]:
     if not query_result["ids"]:
         raise HTTPException(404, f"Artist '{artist_id}' not found")
 
-    query_embedding = query_result["embeddings"][0]
+    embeddings = query_result["embeddings"]
+    assert embeddings is not None
+    query_embedding = embeddings[0]
 
     # Query for all artists
     results = collection.query(
-        query_embeddings=[query_embedding],
+        query_embeddings=[query_embedding],  # pyright: ignore[reportArgumentType]
         n_results=collection.count(),
         include=["distances"],
     )
 
+    distances = results["distances"]
+    assert distances is not None
     return {
         id_: dist
         for id_, dist in zip(
-            results["ids"][0], results["distances"][0], strict=True
+            results["ids"][0], distances[0], strict=True
         )
     }
 
@@ -294,7 +300,7 @@ def get_umap_projection(
 
     return {
         id_: coord.tolist()
-        for id_, coord in zip(ids, coords, strict=True)
+        for id_, coord in zip(ids, coords, strict=True)  # pyright: ignore[reportArgumentType]
     }
 
 
@@ -345,6 +351,7 @@ def create_triplet(
             ),
         )
         conn.commit()
+        assert cursor.lastrowid is not None
         triplet_id = cursor.lastrowid
 
         # Count triplets for this dataset to check if we need a full retrain (all users)

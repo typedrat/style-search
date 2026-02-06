@@ -169,7 +169,7 @@ def get_clusters(dataset: str) -> dict[str, int]:
 
         # Fit KMeans
         n_clusters = min(N_CLUSTERS, len(ids))
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)  # pyright: ignore[reportArgumentType]
         labels = kmeans.fit_predict(X)
 
         _cluster_labels[dataset] = {

@@ -260,7 +260,7 @@ def train_cmd(
         evaluate(model, test_triplets, embeddings)
         if test_triplets else None
     )
-    if test_acc is not None:
+    if test_acc is not None and baseline_test_acc is not None:
         improvement = trained_acc - baseline_acc
         test_improvement = test_acc - baseline_test_acc
         print(

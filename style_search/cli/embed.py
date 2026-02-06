@@ -69,11 +69,11 @@ class EVA02EmbeddingFunction:
     def __call__(self, images: list[Image.Image]) -> list[list[float]]:
         with torch.no_grad():
             image_tensors = (
-                torch.stack([self.preprocess(img) for img in images])
+                torch.stack([self.preprocess(img) for img in images])  # pyright: ignore[reportCallIssue, reportArgumentType]
                 .to(self.device)
                 .half()
             )
-            features = self.model.encode_image(image_tensors)
+            features = self.model.encode_image(image_tensors)  # pyright: ignore[reportCallIssue]
             features = features / features.norm(dim=-1, keepdim=True)
             return features.float().cpu().tolist()
 
@@ -254,7 +254,7 @@ def embed(
             # Add to collection
             collection.add(
                 ids=batch_ids,
-                embeddings=embeddings,
+                embeddings=embeddings,  # pyright: ignore[reportArgumentType]
                 metadatas=batch_metadata,
                 uris=batch_uris,
             )

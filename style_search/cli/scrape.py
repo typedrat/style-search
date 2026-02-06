@@ -89,12 +89,12 @@ def extract_artist_data(html: str) -> dict[str, dict]:
         if not artist_name:
             continue
 
-        entry = {"name": artist_name}
+        entry: dict[str, str | int] = {"name": artist_name}
 
         prev = strong.find_previous("a")
         while prev:
-            if prev.find("img") and prev.get("href"):
-                href = prev["href"]
+            href = prev.get("href")
+            if prev.find("img") and isinstance(href, str):
                 exts = ('.jpg', '.jpeg', '.png', '.gif', '.webp')
                 if any(href.lower().endswith(ext) for ext in exts):
                     entry["image_url"] = href
@@ -105,8 +105,9 @@ def extract_artist_data(html: str) -> dict[str, dict]:
             continue
 
         e621_link = strong.find_next("a")
-        if e621_link and "e621" in e621_link.get("href", ""):
-            entry["e621_url"] = e621_link["href"]
+        e621_href = e621_link.get("href", "") if e621_link else ""
+        if isinstance(e621_href, str) and "e621" in e621_href:
+            entry["e621_url"] = e621_href
 
         parent = strong.parent
         if parent:
@@ -263,7 +264,7 @@ def scrape(url: str, output: str, workers: int):
 
     start_time = time.time()
 
-    def format_size(b: int) -> str:
+    def format_size(b: float) -> str:
         for unit in ("B", "KB", "MB", "GB"):
             if b < 1024:
                 return f"{b:.1f} {unit}"
