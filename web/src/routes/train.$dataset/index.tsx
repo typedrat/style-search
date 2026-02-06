@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeft, User } from "lucide-react";
 import {
@@ -163,6 +163,24 @@ function TrainView() {
     void navigate({ to: "/train/$dataset", params: { dataset: newDataset } });
   };
 
+  // Swipe gesture support for mobile
+  const pointerStart = useRef<{ x: number; y: number } | null>(null);
+
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
+    pointerStart.current = { x: e.clientX, y: e.clientY };
+  }, []);
+
+  const onPointerUp = useCallback((e: React.PointerEvent) => {
+    if (!pointerStart.current) return;
+    const dx = e.clientX - pointerStart.current.x;
+    const dy = e.clientY - pointerStart.current.y;
+    const THRESHOLD = 60;
+    if (Math.abs(dx) > THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
+      void handleChoice(dx < 0 ? "A" : "B");
+    }
+    pointerStart.current = null;
+  }, [handleChoice]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -204,7 +222,7 @@ function TrainView() {
   // Show loading state
   if (userLoading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-background text-muted-foreground">
+      <div className="flex items-center justify-center h-dvh bg-background text-muted-foreground">
         Checking authentication...
       </div>
     );
@@ -213,7 +231,7 @@ function TrainView() {
   // Require authentication for training
   if (!user) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen bg-background text-foreground gap-4">
+      <div className="flex flex-col items-center justify-center h-dvh bg-background text-foreground gap-4">
         <h1 className="text-xl font-semibold">Authentication Required</h1>
         <p className="text-muted-foreground">
           {userError || "You need a valid user token to contribute training data."}
@@ -230,14 +248,14 @@ function TrainView() {
 
   if (!anchor || !optionA || !optionB || suggestionLoading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-background text-muted-foreground">
+      <div className="flex items-center justify-center h-dvh bg-background text-muted-foreground">
         {suggestionLoading ? "Getting suggestion..." : "Loading..."}
       </div>
     );
   }
 
   return (
-    <div className="h-screen flex flex-col bg-background text-foreground">
+    <div className="h-dvh flex flex-col bg-background text-foreground">
       <header className="border-b border-border px-4 py-3 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-4">
           <Link to="/$dataset" params={{ dataset }}>
@@ -245,63 +263,76 @@ function TrainView() {
               <ArrowLeft className="size-4" />
             </Button>
           </Link>
-          <h1 className="text-lg font-semibold">Style Similarity Training</h1>
+          <h1 className="text-lg font-semibold hidden sm:block">Style Similarity Training</h1>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 sm:gap-4">
           <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">Random</span>
+            <span className="text-sm text-muted-foreground hidden sm:inline">Random</span>
             <Switch
               checked={useSuggested}
               onCheckedChange={setUseSuggested}
               disabled={suggestionLoading}
             />
-            <span className="text-sm text-muted-foreground">Suggested</span>
+            <span className="text-sm text-muted-foreground hidden sm:inline">Suggested</span>
           </div>
-          <Select value={dataset} onValueChange={handleDatasetChange}>
-            <SelectTrigger className="w-48">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {datasets.map(ds => (
-                <SelectItem key={ds} value={ds}>
-                  {ds}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
           <Link
             to="/train/$dataset/view"
             params={{ dataset }}
             className="text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
-            {tripletCount} triplets collected
+            {tripletCount}
+            {" "}
+            <span className="hidden sm:inline">triplets collected</span>
           </Link>
-          <Button variant="outline" size="sm" onClick={() => void handleExport()}>
-            Export
-          </Button>
-          <div className="flex items-center gap-1.5 text-sm text-muted-foreground border-l border-border pl-4">
-            <User className="size-4" />
-            <span>{user.name}</span>
+          <div className="hidden sm:flex items-center gap-4">
+            <Select value={dataset} onValueChange={handleDatasetChange}>
+              <SelectTrigger className="w-48">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {datasets.map(ds => (
+                  <SelectItem key={ds} value={ds}>
+                    {ds}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button variant="outline" size="sm" onClick={() => void handleExport()}>
+              Export
+            </Button>
+            <div className="flex items-center gap-1.5 text-sm text-muted-foreground border-l border-border pl-4">
+              <User className="size-4" />
+              <span>{user.name}</span>
+            </div>
           </div>
         </div>
       </header>
 
-      <main className="flex-1 flex flex-col items-center justify-center gap-4 p-4 min-h-0">
-        <div className="text-center shrink-0">
+      <main
+        className="flex-1 flex flex-col items-center justify-center gap-4 p-4 min-h-0 touch-pan-y"
+        onPointerDown={onPointerDown}
+        onPointerUp={onPointerUp}
+      >
+        {/* Desktop: full question text */}
+        <div className="text-center shrink-0 hidden sm:block">
           <p className="text-muted-foreground">
             Which style is more similar to the anchor?
           </p>
           {suggestionScores && (
             <p className="text-xs text-muted-foreground/60 mt-1">
-              Uncertainty: {suggestionScores.uncertainty.toFixed(3)}
+              Uncertainty:
+              {" "}
+              {suggestionScores.uncertainty.toFixed(3)}
               {" | "}
-              Diversity: {suggestionScores.diversity.toFixed(3)}
+              Diversity:
+              {" "}
+              {suggestionScores.diversity.toFixed(3)}
             </p>
           )}
         </div>
 
-        <div className="flex items-start gap-4 flex-1 min-h-0 max-h-full">
-          {/* Option A */}
+        {/* Desktop: three cards in a row */}
+        <div className="hidden sm:flex items-start gap-4 flex-1 min-h-0 max-h-full">
           <button
             onClick={() => void handleChoice("A")}
             className="group focus:outline-none h-full"
@@ -314,7 +345,6 @@ function TrainView() {
             />
           </button>
 
-          {/* Anchor */}
           <ArtistCard
             dataset={dataset}
             artist={anchor}
@@ -322,7 +352,6 @@ function TrainView() {
             highlight
           />
 
-          {/* Option B */}
           <button
             onClick={() => void handleChoice("B")}
             className="group focus:outline-none h-full"
@@ -336,30 +365,78 @@ function TrainView() {
           </button>
         </div>
 
-        <div className="flex gap-2 shrink-0">
+        {/* Mobile: anchor small on top, A/B large below */}
+        <div className="sm:hidden flex flex-col flex-1 min-h-0 w-full gap-2">
+          <div className="text-center text-xs text-muted-foreground">
+            Which is more similar to the anchor?
+          </div>
+          <div className="shrink-0 flex justify-center">
+            <div className="w-1/2 max-w-56 border-2 border-ctp-peach rounded-lg">
+              <img
+                src={getArtistImageUrl(dataset, anchor.id)}
+                alt={anchor.id}
+                className="w-full rounded-t-md"
+              />
+              <div className="p-1 bg-ctp-surface0 text-center">
+                <div className="text-xs font-medium truncate">
+                  {displayName(anchor.id)}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="flex gap-3 flex-1 min-h-0 w-full">
+            <button
+              onClick={() => void handleChoice("A")}
+              className="group focus:outline-none flex-1 min-w-0 h-full"
+            >
+              <ArtistCard
+                dataset={dataset}
+                artist={optionA}
+                label="A"
+                clickable
+              />
+            </button>
+            <button
+              onClick={() => void handleChoice("B")}
+              className="group focus:outline-none flex-1 min-w-0 h-full"
+            >
+              <ArtistCard
+                dataset={dataset}
+                artist={optionB}
+                label="B"
+                clickable
+              />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex flex-col sm:flex-row gap-2 shrink-0 w-full sm:w-auto px-2 sm:px-0">
           <Button
-            variant="ghost"
-            size="sm"
+            variant="outline"
+            className="w-full sm:w-auto"
             onClick={() => void handleChoice("skip", "too_similar")}
             title="Keyboard: S"
           >
-            Too similar (S)
+            Too similar
+            <span className="hidden sm:inline">(S)</span>
           </Button>
           <Button
-            variant="ghost"
-            size="sm"
+            variant="outline"
+            className="w-full sm:w-auto"
             onClick={() => void handleChoice("skip", "anchor_outlier")}
             title="Keyboard: D"
           >
-            Anchor too different (D)
+            Anchor too different
+            <span className="hidden sm:inline">(D)</span>
           </Button>
           <Button
-            variant="ghost"
-            size="sm"
+            variant="outline"
+            className="w-full sm:w-auto"
             onClick={() => void handleChoice("skip", "unknown")}
             title="Keyboard: Space"
           >
-            Don't know (Space)
+            Don't know
+            <span className="hidden sm:inline">(Space)</span>
           </Button>
         </div>
       </main>
