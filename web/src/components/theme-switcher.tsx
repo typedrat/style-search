@@ -4,11 +4,11 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
-import { useTheme } from './theme-provider'
+} from "@/components/ui/select";
+import { useTheme } from "./theme-provider";
 
 export function ThemeSwitcher() {
-  const { theme, setTheme } = useTheme()
+  const { theme, setTheme } = useTheme();
 
   return (
     <Select value={theme} onValueChange={setTheme}>
@@ -23,5 +23,5 @@ export function ThemeSwitcher() {
         <SelectItem value="mocha">Mocha</SelectItem>
       </SelectContent>
     </Select>
-  )
+  );
 }

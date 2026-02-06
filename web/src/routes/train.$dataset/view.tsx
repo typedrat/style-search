@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
-import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
-import { ArrowLeft, Trash2, User } from 'lucide-react'
+import { useState, useEffect } from "react";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { ArrowLeft, Trash2, User } from "lucide-react";
 import {
   type Triplet,
   type SkipReason,
@@ -9,62 +9,62 @@ import {
   updateTriplet,
   getArtistImageUrl,
   listDatasets,
-} from '@/api'
-import { ArtistHoverPreview } from '@/components/artist-hover-preview'
-import { Button } from '@/components/ui/button'
+} from "@/api";
+import { ArtistHoverPreview } from "@/components/artist-hover-preview";
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { useUser } from '@/components/user-provider'
+} from "@/components/ui/select";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { useUser } from "@/components/user-provider";
 
-export const Route = createFileRoute('/train/$dataset/view')({
+export const Route = createFileRoute("/train/$dataset/view")({
   component: ViewTripletsPage,
-})
+});
 
 function ViewTripletsPage() {
-  const { dataset } = Route.useParams()
-  const navigate = useNavigate()
-  const { user, loading: userLoading, error: userError } = useUser()
+  const { dataset } = Route.useParams();
+  const navigate = useNavigate();
+  const { user, loading: userLoading, error: userError } = useUser();
 
-  const [datasets, setDatasets] = useState<string[]>([])
-  const [triplets, setTriplets] = useState<Triplet[]>([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    listDatasets().then(setDatasets)
-  }, [])
+  const [datasets, setDatasets] = useState<string[]>([]);
+  const [triplets, setTriplets] = useState<Triplet[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setLoading(true)
-    getTriplets(dataset)
-      .then((t) => setTriplets([...t].reverse()))
-      .finally(() => setLoading(false))
-  }, [dataset])
+    void listDatasets().then(setDatasets);
+  }, []);
+
+  useEffect(() => {
+    setLoading(true);
+    void getTriplets(dataset)
+      .then(t => setTriplets([...t].reverse()))
+      .finally(() => setLoading(false));
+  }, [dataset]);
 
   const handleDatasetChange = (newDataset: string) => {
-    navigate({ to: '/train/$dataset/view', params: { dataset: newDataset } })
-  }
+    void navigate({ to: "/train/$dataset/view", params: { dataset: newDataset } });
+  };
 
   const handleDelete = async (id: number) => {
-    await deleteTriplet(id)
-    setTriplets((prev) => prev.filter((t) => t.id !== id))
-  }
+    await deleteTriplet(id);
+    setTriplets(prev => prev.filter(t => t.id !== id));
+  };
 
   const handleUpdate = async (
     id: number,
-    update: { choice: 'A' | 'B' | null; skip_reason: SkipReason | null }
+    update: { choice: "A" | "B" | null; skip_reason: SkipReason | null },
   ) => {
-    const updated = await updateTriplet(id, update)
-    setTriplets((prev) => prev.map((t) => (t.id === id ? updated : t)))
-  }
+    const updated = await updateTriplet(id, update);
+    setTriplets(prev => prev.map(t => (t.id === id ? updated : t)));
+  };
 
-  const skipped = triplets.filter((t) => t.choice === null)
-  const judged = triplets.filter((t) => t.choice !== null)
+  const skipped = triplets.filter(t => t.choice === null);
+  const judged = triplets.filter(t => t.choice !== null);
 
   // Show loading state
   if (userLoading) {
@@ -72,7 +72,7 @@ function ViewTripletsPage() {
       <div className="flex items-center justify-center h-screen bg-background text-muted-foreground">
         Checking authentication...
       </div>
-    )
+    );
   }
 
   // Require authentication
@@ -81,13 +81,13 @@ function ViewTripletsPage() {
       <div className="flex flex-col items-center justify-center h-screen bg-background text-foreground gap-4">
         <h1 className="text-xl font-semibold">Authentication Required</h1>
         <p className="text-muted-foreground">
-          {userError || 'You need a valid user token to view your training data.'}
+          {userError || "You need a valid user token to view your training data."}
         </p>
         <Link to="/$dataset" params={{ dataset }}>
           <Button variant="outline">Back to Browse</Button>
         </Link>
       </div>
-    )
+    );
   }
 
   return (
@@ -107,7 +107,7 @@ function ViewTripletsPage() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {datasets.map((ds) => (
+              {datasets.map(ds => (
                 <SelectItem key={ds} value={ds}>
                   {ds}
                 </SelectItem>
@@ -126,41 +126,46 @@ function ViewTripletsPage() {
 
       <ScrollArea className="flex-1">
         <div className="p-4 space-y-4">
-          {loading ? (
-            <div className="text-center text-muted-foreground">Loading...</div>
-          ) : triplets.length === 0 ? (
-            <div className="text-center text-muted-foreground">
-              No triplets collected yet.{' '}
-              <Link to="/train/$dataset" params={{ dataset }} className="underline">
-                Start training
-              </Link>
-            </div>
-          ) : (
-            triplets.map((triplet) => (
-              <TripletCard
-                key={triplet.id}
-                triplet={triplet}
-                dataset={dataset}
-                onDelete={() => triplet.id && handleDelete(triplet.id)}
-                onUpdate={(update) => triplet.id && handleUpdate(triplet.id, update)}
-              />
-            ))
-          )}
+          {loading
+            ? (
+                <div className="text-center text-muted-foreground">Loading...</div>
+              )
+            : triplets.length === 0
+              ? (
+                  <div className="text-center text-muted-foreground">
+                    No triplets collected yet.
+                    {" "}
+                    <Link to="/train/$dataset" params={{ dataset }} className="underline">
+                      Start training
+                    </Link>
+                  </div>
+                )
+              : (
+                  triplets.map(triplet => (
+                    <TripletCard
+                      key={triplet.id}
+                      triplet={triplet}
+                      dataset={dataset}
+                      onDelete={() => { if (triplet.id) void handleDelete(triplet.id); }}
+                      onUpdate={(update) => { if (triplet.id) void handleUpdate(triplet.id, update); }}
+                    />
+                  ))
+                )}
         </div>
       </ScrollArea>
     </div>
-  )
+  );
 }
 
 function displayName(id: string): string {
-  return id.replace(/_\(artist\)$/i, '')
+  return id.replace(/_\(artist\)$/i, "");
 }
 
 const SKIP_REASON_LABELS: Record<SkipReason, string> = {
-  too_similar: 'Too similar',
-  anchor_outlier: 'Anchor too different',
+  too_similar: "Too similar",
+  anchor_outlier: "Anchor too different",
   unknown: "Don't know",
-}
+};
 
 function TripletCard({
   triplet,
@@ -168,28 +173,28 @@ function TripletCard({
   onDelete,
   onUpdate,
 }: {
-  triplet: Triplet
-  dataset: string
-  onDelete: () => void
-  onUpdate: (update: { choice: 'A' | 'B' | null; skip_reason: SkipReason | null }) => void
+  triplet: Triplet;
+  dataset: string;
+  onDelete: () => void;
+  onUpdate: (update: { choice: "A" | "B" | null; skip_reason: SkipReason | null }) => void;
 }) {
-  const isSkipped = triplet.choice === null
+  const isSkipped = triplet.choice === null;
 
   const handleChooseA = () => {
-    onUpdate({ choice: 'A', skip_reason: null })
-  }
+    onUpdate({ choice: "A", skip_reason: null });
+  };
 
   const handleChooseB = () => {
-    onUpdate({ choice: 'B', skip_reason: null })
-  }
+    onUpdate({ choice: "B", skip_reason: null });
+  };
 
   const handleSkip = () => {
-    onUpdate({ choice: null, skip_reason: 'unknown' })
-  }
+    onUpdate({ choice: null, skip_reason: "unknown" });
+  };
 
   const handleSkipReasonChange = (reason: string) => {
-    onUpdate({ choice: null, skip_reason: reason as SkipReason })
-  }
+    onUpdate({ choice: null, skip_reason: reason as SkipReason });
+  };
 
   return (
     <div className="flex items-center gap-4 p-3 rounded-lg bg-ctp-surface0">
@@ -197,7 +202,7 @@ function TripletCard({
       <button
         onClick={handleChooseA}
         className={`flex flex-col items-center p-2 rounded-lg transition-all hover:bg-ctp-surface1 ${
-          triplet.choice === 'A' ? 'ring-2 ring-ctp-green' : ''
+          triplet.choice === "A" ? "ring-2 ring-ctp-green" : ""
         }`}
       >
         <ArtistHoverPreview dataset={dataset} artistId={triplet.option_a} side="top">
@@ -230,7 +235,7 @@ function TripletCard({
       <button
         onClick={handleChooseB}
         className={`flex flex-col items-center p-2 rounded-lg transition-all hover:bg-ctp-surface1 ${
-          triplet.choice === 'B' ? 'ring-2 ring-ctp-green' : ''
+          triplet.choice === "B" ? "ring-2 ring-ctp-green" : ""
         }`}
       >
         <ArtistHoverPreview dataset={dataset} artistId={triplet.option_b} side="top">
@@ -245,29 +250,31 @@ function TripletCard({
 
       {/* Status / Skip reason */}
       <div className="ml-auto flex items-center gap-3">
-        {isSkipped ? (
-          <Select
-            value={triplet.skip_reason ?? 'unknown'}
-            onValueChange={handleSkipReasonChange}
-          >
-            <SelectTrigger className="w-40 h-8 text-sm">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {Object.entries(SKIP_REASON_LABELS).map(([value, label]) => (
-                <SelectItem key={value} value={value}>
-                  {label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : (
-          <span className="text-sm text-ctp-green">Chose {triplet.choice}</span>
-        )}
+        {isSkipped
+          ? (
+              <Select
+                value={triplet.skip_reason ?? "unknown"}
+                onValueChange={handleSkipReasonChange}
+              >
+                <SelectTrigger className="w-40 h-8 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(SKIP_REASON_LABELS).map(([value, label]) => (
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )
+          : (
+              <span className="text-sm text-ctp-green">Chose {triplet.choice}</span>
+            )}
         <Button variant="ghost" size="icon" onClick={onDelete}>
           <Trash2 className="size-4 text-ctp-red" />
         </Button>
       </div>
     </div>
-  )
+  );
 }

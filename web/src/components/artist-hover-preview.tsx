@@ -2,21 +2,21 @@ import {
   HoverCard,
   HoverCardContent,
   HoverCardTrigger,
-} from '@/components/ui/hover-card'
-import { getArtistImageUrl } from '@/api'
+} from "@/components/ui/hover-card";
+import { getArtistImageUrl } from "@/api";
 
 interface ArtistHoverPreviewProps {
-  dataset: string
-  artistId: string
-  side?: 'left' | 'right' | 'top' | 'bottom'
-  openDelay?: number
-  children: React.ReactNode
+  dataset: string;
+  artistId: string;
+  side?: "left" | "right" | "top" | "bottom";
+  openDelay?: number;
+  children: React.ReactNode;
 }
 
 export function ArtistHoverPreview({
   dataset,
   artistId,
-  side = 'right',
+  side = "right",
   openDelay = 0,
   children,
 }: ArtistHoverPreviewProps) {
@@ -31,5 +31,5 @@ export function ArtistHoverPreview({
         />
       </HoverCardContent>
     </HoverCard>
-  )
+  );
 }
