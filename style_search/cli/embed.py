@@ -12,6 +12,7 @@ from typing import ClassVar
 import chromadb
 import click
 import torch
+from chromadb.config import Settings
 from PIL import Image
 from rich.console import Console
 from rich.panel import Panel
@@ -152,7 +153,10 @@ def embed(
     console.print(f"[green]Found {len(image_files)} images[/green]\n")
 
     # Initialize ChromaDB
-    client = chromadb.PersistentClient(path=str(db_path))
+    client = chromadb.PersistentClient(
+        path=str(db_path),
+        settings=Settings(anonymized_telemetry=False),
+    )
     collection_name = input_dir.name
 
     if reset:

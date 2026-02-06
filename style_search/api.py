@@ -7,6 +7,7 @@ from pathlib import Path
 import chromadb
 import click
 import uvicorn
+from chromadb.config import Settings
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -156,7 +157,10 @@ def get_collection(dataset: str) -> chromadb.Collection:
         chroma_path = dataset_chroma_path(dataset)
         if not chroma_path.exists():
             raise HTTPException(404, f"Dataset '{dataset}' not found")
-        _clients[dataset] = chromadb.PersistentClient(path=str(chroma_path))
+        _clients[dataset] = chromadb.PersistentClient(
+            path=str(chroma_path),
+            settings=Settings(anonymized_telemetry=False),
+        )
         _collections[dataset] = _clients[dataset].get_collection(dataset)
     return _collections[dataset]
 

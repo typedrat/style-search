@@ -8,6 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from chromadb.config import Settings
 from torch.utils.data import DataLoader, Dataset
 
 from style_search.config import dataset_chroma_path
@@ -161,7 +162,10 @@ def load_embeddings(dataset: str) -> dict[str, np.ndarray]:
     if not chroma_path.exists():
         raise FileNotFoundError(f"Dataset not found: {chroma_path}")
 
-    client = chromadb.PersistentClient(path=str(chroma_path))
+    client = chromadb.PersistentClient(
+        path=str(chroma_path),
+        settings=Settings(anonymized_telemetry=False),
+    )
     collection = client.get_collection(dataset)
     results = collection.get(include=["embeddings"])
     embeddings = results["embeddings"]
