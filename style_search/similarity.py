@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 from style_search.config import LOG_DIR, MODELS_DIR, TRIPLETS_DB, dataset_dir
-from style_search.train_similarity import (
+from style_search.training import (
     TripletDataset,
     WeightedDistance,
     evaluate,

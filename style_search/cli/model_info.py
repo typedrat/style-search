@@ -304,10 +304,10 @@ def run_browser() -> None:
     app.run()
 
 
-@click.command()
+@click.command("model-info")
 @click.argument("model_path", type=click.Path(exists=True), required=False)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def main(model_path: str | None, as_json: bool) -> None:
+def model_info(model_path: str | None, as_json: bool) -> None:
     """View metadata for a safetensors model file.
 
     If MODEL_PATH is provided, display that model's info.
@@ -328,7 +328,3 @@ def main(model_path: str | None, as_json: bool) -> None:
         path = versions[-1]
 
     display_model(path, console, as_json=as_json)
-
-
-if __name__ == "__main__":
-    main()

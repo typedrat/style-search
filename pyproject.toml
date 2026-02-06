@@ -30,10 +30,8 @@ dependencies = [
 ]
 
 [project.scripts]
-scrape-doomp = "style_search.scrape_doomp:main"
-embed-images = "style_search.embed_images:main"
 style-api = "style_search.api:main"
-model-info = "style_search.model_info:main"
+style-cli = "style_search.cli:main"
 
 [[tool.uv.index]]
 name = "pytorch-cu130"

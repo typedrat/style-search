@@ -161,7 +161,7 @@ def download_image(artist: str, url: str, output_dir: Path) -> tuple[str, bool |
 @click.argument("url")
 @click.option("-o", "--output", default="data/doomp", help="Output directory")
 @click.option("-w", "--workers", default=DEFAULT_WORKERS, show_default=True, help="Parallel workers")
-def main(url: str, output: str, workers: int):
+def scrape(url: str, output: str, workers: int):
     """Scrape images from a rentry.org doomp (A-Z subpages)."""
     global cancelled
     signal.signal(signal.SIGINT, handle_sigint)
@@ -328,7 +328,3 @@ def main(url: str, output: str, workers: int):
     summary.add_row("[dim]Total size:", f"{total_bytes / 1024 / 1024:.1f} MB")
     summary.add_row("[blue]Output:", str(output_dir.absolute()))
     console.print(Panel(summary, title="Complete"))
-
-
-if __name__ == "__main__":
-    main()

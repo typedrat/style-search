@@ -75,7 +75,7 @@ class EVA02EmbeddingFunction:
 @click.option("-m", "--model", type=click.Choice(["large", "big", "big-plus"]), default="big-plus", help="Model variant")
 @click.option("-b", "--batch-size", default=16, help="Batch size for inference")
 @click.option("--reset", is_flag=True, help="Reset existing collection")
-def main(input_dir: Path, db_path: Path | None, model: str, batch_size: int, reset: bool):
+def embed(input_dir: Path, db_path: Path | None, model: str, batch_size: int, reset: bool):
     """Generate EVA02-CLIP embeddings for images and store in ChromaDB."""
     global cancelled
     signal.signal(signal.SIGINT, handle_sigint)
@@ -248,7 +248,3 @@ def main(input_dir: Path, db_path: Path | None, model: str, batch_size: int, res
         summary.add_row("[dim]Speed:", f"{embedded_count / elapsed:.1f} img/s")
     summary.add_row("[blue]Database:", str(db_path))
     console.print(Panel(summary, title="Complete"))
-
-
-if __name__ == "__main__":
-    main()

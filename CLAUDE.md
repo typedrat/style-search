@@ -21,17 +21,36 @@ style-api --reload          # API on :8000
 cd web && npm run dev       # Frontend on :5173
 ```
 
+### CLI Tools
+
+```bash
+# All non-server tools are under style-cli
+style-cli --help
+
+# Generate embeddings for a dataset
+style-cli embed <dataset_dir>
+
+# Scrape images from a doomp page
+style-cli scrape <url>
+
+# View model metadata
+style-cli model-info [model_path]
+
+# User management
+style-cli add-user <name>
+style-cli list-users
+style-cli get-user <name>
+style-cli remove-user <token>
+```
+
 ### Backend
 
 ```bash
-# Generate embeddings for a dataset
-embed-images <dataset_dir>
-
 # Train similarity model
-python -m style_search.train_similarity <dataset> --epochs 100
+style-cli train <dataset> --epochs 100
 
 # Multi-dataset training
-python -m style_search.train_similarity dataset1 dataset2 -o combined.safetensors
+style-cli train dataset1 dataset2 -o combined.safetensors
 
 # Linting and type checking
 uv run ruff check style_search/
@@ -52,9 +71,10 @@ npm run lint     # ESLint
 ### Backend (`style_search/`)
 
 - `api.py` — FastAPI server with REST endpoints for datasets, embeddings, similarity search, triplets, and model management
+- `db.py` — SQLite database access (`get_db`, `init_db`) for triplets and users
 - `similarity.py` — Model loading, warm updates (few gradient steps after each judgment), full retraining, and active learning triplet suggestions
-- `train_similarity.py` — WeightedDistance model (1024 learnable dimension weights), triplet margin loss training, multi-dataset support
-- `embed_images.py` — EVA02-CLIP embedding generation into ChromaDB
+- `training.py` — WeightedDistance model, data loading, triplet margin loss training, multi-dataset support
+- `cli/` — Unified CLI package (`style-cli`): embed, scrape, model-info, train, and user management commands
 
 ### Frontend (`web/src/`)
 

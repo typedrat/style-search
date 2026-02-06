@@ -2,21 +2,20 @@
 """FastAPI backend for style-search visualization."""
 
 import os
-import sqlite3
-from contextlib import contextmanager
 from pathlib import Path
 
-import click
 import chromadb
+import click
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from style_search import similarity
-from style_search.config import TRIPLETS_DB, dataset_chroma_path
+from style_search.config import dataset_chroma_path
+from style_search.db import get_db, init_db
 
 app = FastAPI(title="Style Search API")
 
@@ -48,65 +47,6 @@ def configure_static_files(static_dir: str | Path | None) -> None:
 _env_static_dir = os.environ.get("STYLE_SEARCH_STATIC_DIR")
 if _env_static_dir:
     configure_static_files(_env_static_dir)
-
-
-@contextmanager
-def get_db():
-    """Get a database connection with WAL mode for better concurrency."""
-    TRIPLETS_DB.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(TRIPLETS_DB)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-    finally:
-        conn.close()
-
-
-def init_db():
-    """Initialize the triplets database."""
-    with get_db() as conn:
-        # Users table for allowlist
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                token TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS triplets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                dataset TEXT NOT NULL,
-                anchor TEXT NOT NULL,
-                option_a TEXT NOT NULL,
-                option_b TEXT NOT NULL,
-                choice TEXT,  -- 'A', 'B', or NULL for skip
-                skip_reason TEXT,  -- 'too_similar', 'anchor_outlier', 'unknown', or NULL
-                user_id TEXT,  -- references users(token)
-                timestamp INTEGER NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_triplets_dataset ON triplets(dataset)
-        """)
-        # Migration: add skip_reason column if it doesn't exist
-        cursor = conn.execute("PRAGMA table_info(triplets)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if "skip_reason" not in columns:
-            conn.execute("ALTER TABLE triplets ADD COLUMN skip_reason TEXT")
-            # Migrate legacy skips to 'unknown'
-            conn.execute("UPDATE triplets SET skip_reason = 'unknown' WHERE choice IS NULL AND skip_reason IS NULL")
-        # Migration: add user_id column if it doesn't exist
-        if "user_id" not in columns:
-            conn.execute("ALTER TABLE triplets ADD COLUMN user_id TEXT")
-        # Create index on user_id (after migration ensures column exists)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_triplets_user ON triplets(user_id)
-        """)
-        conn.commit()
 
 
 # Initialize database on startup
@@ -616,13 +556,7 @@ def serve_spa(path: str):
     raise HTTPException(404, "Not found")
 
 
-@click.group()
-def cli():
-    """Style Search API commands."""
-    pass
-
-
-@cli.command()
+@click.command()
 @click.option("-h", "--host", default="127.0.0.1", help="Host to bind to")
 @click.option("-p", "--port", default=8000, help="Port to bind to")
 @click.option("--reload", is_flag=True, help="Enable auto-reload")
@@ -631,7 +565,7 @@ def cli():
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     help="Serve frontend static files from this directory (e.g., web/dist)",
 )
-def serve(host: str, port: int, reload: bool, static_dir: Path | None):
+def main(host: str, port: int, reload: bool, static_dir: Path | None):
     """Run the style-search API server."""
     # Set static dir via env var so it's picked up when uvicorn imports the app
     if static_dir:
@@ -642,97 +576,6 @@ def serve(host: str, port: int, reload: bool, static_dir: Path | None):
         port=port,
         reload=reload,
     )
-
-
-@cli.command()
-@click.argument("name")
-def add_user(name: str):
-    """Add a user to the allowlist. Generates a random token."""
-    import hashlib
-    import secrets
-
-    token = hashlib.sha256(secrets.token_bytes(32)).hexdigest()
-
-    with get_db() as conn:
-        conn.execute("INSERT INTO users (token, name) VALUES (?, ?)", (token, name))
-        conn.commit()
-
-    domain = os.environ.get("STYLE_SEARCH_DOMAIN")
-    protocol = os.environ.get("STYLE_SEARCH_PROTOCOL", "https")
-
-    print(f"Created user '{name}'")
-    print(f"Token: {token}")
-    if domain:
-        print(f"Share URL: {protocol}://{domain}/?user={token}")
-
-
-@cli.command()
-def list_users():
-    """List all users in the allowlist with triplet stats."""
-    with get_db() as conn:
-        rows = conn.execute("""
-            SELECT u.token, u.name, u.created_at,
-                   COUNT(t.id) as total_triplets,
-                   SUM(CASE WHEN t.choice IS NOT NULL THEN 1 ELSE 0 END) as judgments,
-                   SUM(CASE WHEN t.choice IS NULL THEN 1 ELSE 0 END) as skips
-            FROM users u
-            LEFT JOIN triplets t ON u.token = t.user_id
-            GROUP BY u.token
-            ORDER BY u.created_at
-        """).fetchall()
-        if not rows:
-            print("No users found.")
-            return
-        for row in rows:
-            stats = f"{row['total_triplets']} triplets ({row['judgments']} judgments, {row['skips']} skips)"
-            print(f"{row['name']}: {row['token'][:16]}... | {stats} | created {row['created_at']}")
-
-
-@cli.command()
-@click.argument("name")
-@click.option("--show-token", is_flag=True, help="Show the full token")
-def get_user(name: str, show_token: bool):
-    """Show details for a user by name."""
-    with get_db() as conn:
-        row = conn.execute("""
-            SELECT u.token, u.name, u.created_at,
-                   COUNT(t.id) as total_triplets,
-                   SUM(CASE WHEN t.choice IS NOT NULL THEN 1 ELSE 0 END) as judgments,
-                   SUM(CASE WHEN t.choice IS NULL THEN 1 ELSE 0 END) as skips
-            FROM users u
-            LEFT JOIN triplets t ON u.token = t.user_id
-            WHERE u.name = ?
-            GROUP BY u.token
-        """, (name,)).fetchone()
-        if not row:
-            print(f"User not found: {name}")
-            raise SystemExit(1)
-        token = row["token"] if show_token else f"{row['token'][:16]}..."
-        stats = f"{row['total_triplets']} triplets ({row['judgments']} judgments, {row['skips']} skips)"
-        print(f"{row['name']}: {token} | {stats} | created {row['created_at']}")
-
-
-@cli.command()
-@click.argument("token")
-def remove_user(token: str):
-    """Remove a user from the allowlist."""
-    with get_db() as conn:
-        cursor = conn.execute("DELETE FROM users WHERE token = ?", (token,))
-        conn.commit()
-        if cursor.rowcount == 0:
-            print(f"User not found: {token}")
-        else:
-            print(f"Removed user with token: {token[:16]}...")
-
-
-def main():
-    """Entry point that supports both old and new CLI styles."""
-    import sys
-    # If no subcommand given or first arg looks like an option, default to serve
-    if len(sys.argv) == 1 or (len(sys.argv) > 1 and sys.argv[1].startswith("-")):
-        serve(standalone_mode=False)
-    else:
-        cli()
 
 
 if __name__ == "__main__":
