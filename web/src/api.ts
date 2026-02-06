@@ -154,7 +154,9 @@ export interface SuggestedTriplet {
 }
 
 export async function suggestTriplet(dataset: string): Promise<SuggestedTriplet> {
-  const res = await fetch(`/api/datasets/${encodeURIComponent(dataset)}/suggest-triplet`);
+  const userToken = getUserToken();
+  const params = userToken ? `?user=${encodeURIComponent(userToken)}` : "";
+  const res = await fetch(`/api/datasets/${encodeURIComponent(dataset)}/suggest-triplet${params}`);
   if (!res.ok) {
     throw new Error(`Failed to suggest triplet: ${res.statusText}`);
   }
@@ -171,7 +173,9 @@ export interface ModelStatus {
 }
 
 export async function getModelStatus(dataset: string): Promise<ModelStatus> {
-  const res = await fetch(`/api/datasets/${encodeURIComponent(dataset)}/model-status`);
+  const userToken = getUserToken();
+  const params = userToken ? `?user=${encodeURIComponent(userToken)}` : "";
+  const res = await fetch(`/api/datasets/${encodeURIComponent(dataset)}/model-status${params}`);
   if (!res.ok) {
     throw new Error(`Failed to get model status: ${res.statusText}`);
   }
@@ -188,7 +192,9 @@ export interface RetrainResult {
 }
 
 export async function retrainModel(dataset: string): Promise<RetrainResult> {
-  const res = await fetch(`/api/datasets/${encodeURIComponent(dataset)}/retrain`, {
+  const userToken = getUserToken();
+  const params = userToken ? `?user=${encodeURIComponent(userToken)}` : "";
+  const res = await fetch(`/api/datasets/${encodeURIComponent(dataset)}/retrain${params}`, {
     method: "POST",
   });
   if (!res.ok) {

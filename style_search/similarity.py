@@ -92,21 +92,31 @@ class ModelStatus:
     weights_exist: bool
 
 
-def _get_lock(dataset: str) -> threading.Lock:
-    """Get or create a lock for a dataset."""
-    if dataset not in _model_locks:
-        _model_locks[dataset] = threading.Lock()
-    return _model_locks[dataset]
+def _state_key(dataset: str, user_id: str | None) -> str:
+    """Return a dict key scoping state by dataset and optional user."""
+    if user_id is None:
+        return dataset
+    return f"{dataset}:{user_id}"
 
 
-def _models_dir(dataset: str) -> Path:
-    """Get the models directory for a dataset."""
+def _get_lock(dataset: str, user_id: str | None = None) -> threading.Lock:
+    """Get or create a lock for a dataset (and optional user)."""
+    key = _state_key(dataset, user_id)
+    if key not in _model_locks:
+        _model_locks[key] = threading.Lock()
+    return _model_locks[key]
+
+
+def _models_dir(dataset: str, user_id: str | None = None) -> Path:
+    """Get the models directory for a dataset (and optional user)."""
+    if user_id is not None:
+        return MODELS_DIR / dataset / "users" / user_id
     return MODELS_DIR / dataset
 
 
-def _get_versions(dataset: str) -> list[int]:
+def _get_versions(dataset: str, user_id: str | None = None) -> list[int]:
     """Get all existing version numbers for a dataset, sorted ascending."""
-    models_dir = _models_dir(dataset)
+    models_dir = _models_dir(dataset, user_id)
     if not models_dir.exists():
         return []
     versions = []
@@ -119,26 +129,32 @@ def _get_versions(dataset: str) -> list[int]:
     return sorted(versions)
 
 
-def _get_latest_version(dataset: str) -> int | None:
+def _get_latest_version(
+    dataset: str, user_id: str | None = None,
+) -> int | None:
     """Get the latest version number for a dataset, or None if no versions exist."""
-    versions = _get_versions(dataset)
+    versions = _get_versions(dataset, user_id)
     return versions[-1] if versions else None
 
 
-def _get_next_version(dataset: str) -> int:
+def _get_next_version(dataset: str, user_id: str | None = None) -> int:
     """Get the next version number for a dataset."""
-    latest = _get_latest_version(dataset)
+    latest = _get_latest_version(dataset, user_id)
     return (latest or 0) + 1
 
 
-def _version_path(dataset: str, version: int) -> Path:
+def _version_path(
+    dataset: str, version: int, user_id: str | None = None,
+) -> Path:
     """Get the path to a specific version's weights file."""
-    return _models_dir(dataset) / f"v{version:03d}.safetensors"
+    return _models_dir(dataset, user_id) / f"v{version:03d}.safetensors"
 
 
-def _metadata_path(dataset: str, version: int) -> Path:
+def _metadata_path(
+    dataset: str, version: int, user_id: str | None = None,
+) -> Path:
     """Get the path to a specific version's metadata file."""
-    return _models_dir(dataset) / f"v{version:03d}.json"
+    return _models_dir(dataset, user_id) / f"v{version:03d}.json"
 
 
 def _legacy_weights_path(dataset: str) -> Path:
@@ -146,11 +162,12 @@ def _legacy_weights_path(dataset: str) -> Path:
     return dataset_dir(dataset) / "similarity_weights.safetensors"
 
 
-def get_model(dataset: str) -> WeightedDistance:
-    """Get or load the model for a dataset."""
-    if dataset not in _models:
-        load_weights(dataset)
-    return _models[dataset]
+def get_model(dataset: str, user_id: str | None = None) -> WeightedDistance:
+    """Get or load the model for a dataset (and optional user)."""
+    key = _state_key(dataset, user_id)
+    if key not in _models:
+        load_weights(dataset, user_id)
+    return _models[key]
 
 
 def get_embeddings(dataset: str) -> dict[str, NDArray[np.floating]]:
@@ -180,82 +197,99 @@ def get_clusters(dataset: str) -> dict[str, int]:
     return _cluster_labels[dataset]
 
 
-def get_anchor_counts(dataset: str) -> dict[str, int]:
+def get_anchor_counts(
+    dataset: str, user_id: str | None = None,
+) -> dict[str, int]:
     """Get anchor usage counts from the database."""
-    if dataset not in _anchor_counts:
-        _refresh_anchor_counts(dataset)
-    return _anchor_counts[dataset]
+    key = _state_key(dataset, user_id)
+    if key not in _anchor_counts:
+        _refresh_anchor_counts(dataset, user_id)
+    return _anchor_counts[key]
 
 
-def _refresh_anchor_counts(dataset: str) -> None:
+def _refresh_anchor_counts(
+    dataset: str, user_id: str | None = None,
+) -> None:
     """Refresh anchor counts from the database."""
+    key = _state_key(dataset, user_id)
     db_path = TRIPLETS_DB
     if not db_path.exists():
-        _anchor_counts[dataset] = {}
+        _anchor_counts[key] = {}
         return
 
     conn = sqlite3.connect(db_path)
-    rows = conn.execute(
+    query = (
         "SELECT anchor, COUNT(*) as count FROM triplets"
-        " WHERE dataset = ? GROUP BY anchor",
-        (dataset,),
-    ).fetchall()
+        " WHERE dataset = ?"
+    )
+    params: list[str] = [dataset]
+    if user_id is not None:
+        query += " AND user_id = ?"
+        params.append(user_id)
+    query += " GROUP BY anchor"
+    rows = conn.execute(query, params).fetchall()
     conn.close()
 
-    _anchor_counts[dataset] = {row[0]: row[1] for row in rows}
+    _anchor_counts[key] = {row[0]: row[1] for row in rows}
 
 
-def load_weights(dataset: str) -> None:
+def load_weights(dataset: str, user_id: str | None = None) -> None:
     """Load weights from disk or initialize a new model.
 
-    Loads from data/models/{dataset}/ (latest version).
-    Falls back to legacy location data/{dataset}/similarity_weights.safetensors
-    for migration.
+    For global models (user_id=None): loads from data/models/{dataset}/,
+    falls back to legacy location.
+    For per-user models: loads from data/models/{dataset}/users/{user_id}/,
+    falls back to fresh model (no global fallback).
     """
+    key = _state_key(dataset, user_id)
     embeddings = get_embeddings(dataset)
     dim = len(next(iter(embeddings.values())))
 
-    # Check for versioned weights in new location
-    latest_version = _get_latest_version(dataset)
+    # Check for versioned weights
+    latest_version = _get_latest_version(dataset, user_id)
     if latest_version is not None:
-        path = _version_path(dataset, latest_version)
+        path = _version_path(dataset, latest_version, user_id)
         tensors = load_file(path)
         model = WeightedDistance(dim)
         model.weights.data = tensors["weights"]
-        _models[dataset] = model
+        _models[key] = model
         print(f"Loaded weights from {path} (v{latest_version:03d})")
         return
 
-    # Check legacy location for migration
-    legacy_path = _legacy_weights_path(dataset)
-    if legacy_path.exists():
-        tensors = load_file(legacy_path)
-        model = WeightedDistance(dim)
-        model.weights.data = tensors["weights"]
-        _models[dataset] = model
-        print(f"Loaded weights from legacy path {legacy_path}")
-        return
+    # Check legacy location for migration (global models only)
+    if user_id is None:
+        legacy_path = _legacy_weights_path(dataset)
+        if legacy_path.exists():
+            tensors = load_file(legacy_path)
+            model = WeightedDistance(dim)
+            model.weights.data = tensors["weights"]
+            _models[key] = model
+            print(f"Loaded weights from legacy path {legacy_path}")
+            return
 
     # No weights found, initialize new model
-    _models[dataset] = WeightedDistance(dim)
-    print(f"Initialized new model for {dataset} (dim={dim})")
+    _models[key] = WeightedDistance(dim)
+    print(f"Initialized new model for {key} (dim={dim})")
 
 
-def save_weights(dataset: str, metadata: dict | None = None) -> int:
+def save_weights(
+    dataset: str, user_id: str | None = None, metadata: dict | None = None,
+) -> int:
     """Save weights to disk as a new version.
 
-    Saves to data/models/{dataset}/v{NNN}.safetensors with accompanying
-    v{NNN}.json metadata file.
+    Saves to data/models/{dataset}/v{NNN}.safetensors (or per-user subdir)
+    with accompanying v{NNN}.json metadata file.
 
     Returns the version number of the saved model.
     """
-    if dataset not in _models:
-        raise ValueError(f"No model loaded for dataset {dataset}")
+    key = _state_key(dataset, user_id)
+    if key not in _models:
+        raise ValueError(f"No model loaded for {key}")
 
-    model = _models[dataset]
-    version = _get_next_version(dataset)
-    weights_path = _version_path(dataset, version)
-    meta_path = _metadata_path(dataset, version)
+    model = _models[key]
+    version = _get_next_version(dataset, user_id)
+    weights_path = _version_path(dataset, version, user_id)
+    meta_path = _metadata_path(dataset, version, user_id)
 
     # Ensure directory exists
     weights_path.parent.mkdir(parents=True, exist_ok=True)
@@ -287,43 +321,48 @@ def save_weights(dataset: str, metadata: dict | None = None) -> int:
     return version
 
 
-def warm_update(dataset: str, triplet: tuple[str, str, str]) -> None:
+def warm_update(
+    dataset: str, triplet: tuple[str, str, str],
+    user_id: str | None = None,
+) -> None:
     """Perform a warm update after a new triplet judgment.
 
     Args:
         dataset: The dataset name
         triplet: (anchor, positive, negative) - positive is the chosen one
+        user_id: Optional user to scope the update to
     """
-    lock = _get_lock(dataset)
+    key = _state_key(dataset, user_id)
+    lock = _get_lock(dataset, user_id)
     with lock:
         # Add to recent triplets cache
-        if dataset not in _triplet_cache:
-            _triplet_cache[dataset] = []
-        _triplet_cache[dataset].append(triplet)
+        if key not in _triplet_cache:
+            _triplet_cache[key] = []
+        _triplet_cache[key].append(triplet)
 
         # Keep only last WARM_UPDATE_BATCH_SIZE triplets
-        if len(_triplet_cache[dataset]) > WARM_UPDATE_BATCH_SIZE:
-            _triplet_cache[dataset] = _triplet_cache[dataset][-WARM_UPDATE_BATCH_SIZE:]
+        if len(_triplet_cache[key]) > WARM_UPDATE_BATCH_SIZE:
+            _triplet_cache[key] = _triplet_cache[key][-WARM_UPDATE_BATCH_SIZE:]
 
         # Update anchor counts
-        if dataset not in _anchor_counts:
-            _anchor_counts[dataset] = {}
+        if key not in _anchor_counts:
+            _anchor_counts[key] = {}
         anchor = triplet[0]
-        _anchor_counts[dataset][anchor] = _anchor_counts[dataset].get(anchor, 0) + 1
+        _anchor_counts[key][anchor] = _anchor_counts[key].get(anchor, 0) + 1
 
         # Get model and embeddings
-        model = get_model(dataset)
+        model = get_model(dataset, user_id)
         embeddings = get_embeddings(dataset)
 
         # Create dataset from recent triplets
         valid_triplets = [
             t
-            for t in _triplet_cache[dataset]
+            for t in _triplet_cache[key]
             if t[0] in embeddings and t[1] in embeddings and t[2] in embeddings
         ]
 
         if not valid_triplets:
-            logger.debug(f"Warm update [{dataset}]: no valid triplets in cache")
+            logger.debug(f"Warm update [{key}]: no valid triplets in cache")
             return
 
         # Prepare tensors
@@ -354,25 +393,26 @@ def warm_update(dataset: str, triplet: tuple[str, str, str]) -> None:
             final_loss = loss.item()
 
         logger.info(
-            f"Warm update [{dataset}]: {len(valid_triplets)} triplets, "
+            f"Warm update [{key}]: {len(valid_triplets)} triplets, "
             f"{WARM_UPDATE_STEPS} steps, loss {initial_loss:.4f} -> {final_loss:.4f}"
         )
 
 
-def full_retrain(dataset: str) -> dict:
+def full_retrain(dataset: str, user_id: str | None = None) -> dict:
     """Perform a full retrain of the model.
 
     Returns metrics dict with train_accuracy, baseline_accuracy, etc.
     """
-    logger.info(f"Full retrain [{dataset}]: starting")
-    lock = _get_lock(dataset)
+    key = _state_key(dataset, user_id)
+    logger.info(f"Full retrain [{key}]: starting")
+    lock = _get_lock(dataset, user_id)
     with lock:
         db_path = TRIPLETS_DB
-        triplets = load_triplets(db_path, dataset)
+        triplets = load_triplets(db_path, dataset, user_id=user_id)
         embeddings = get_embeddings(dataset)
 
         if not triplets:
-            logger.warning(f"Full retrain [{dataset}]: no triplets found")
+            logger.warning(f"Full retrain [{key}]: no triplets found")
             return {"error": "No triplets found", "num_triplets": 0}
 
         # Initialize fresh model
@@ -389,7 +429,9 @@ def full_retrain(dataset: str) -> dict:
         triplet_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 
         # Train
-        logger.info(f"Full retrain [{dataset}]: training on {len(triplets)} triplets")
+        logger.info(
+            f"Full retrain [{key}]: training on {len(triplets)} triplets"
+        )
         loss_history = train(
             model, triplet_loader,
             epochs=100, lr=0.01, margin=0.2,
@@ -400,11 +442,12 @@ def full_retrain(dataset: str) -> dict:
         train_acc = evaluate(model, triplets, embeddings)
 
         # Update in-memory model
-        _models[dataset] = model
+        _models[key] = model
 
         # Save weights with training metadata
         version = save_weights(
             dataset,
+            user_id=user_id,
             metadata={
                 "dim": dim,
                 "train_accuracy": train_acc,
@@ -420,10 +463,10 @@ def full_retrain(dataset: str) -> dict:
         )
 
         # Clear triplet cache
-        _triplet_cache[dataset] = []
+        _triplet_cache[key] = []
 
         logger.info(
-            f"Full retrain [{dataset}]: complete v{version:03d} | "
+            f"Full retrain [{key}]: complete v{version:03d} | "
             f"accuracy {baseline_acc:.1%} -> {train_acc:.1%}"
             f" (+{train_acc - baseline_acc:.1%})"
         )
@@ -438,20 +481,24 @@ def full_retrain(dataset: str) -> dict:
         }
 
 
-def suggest_triplet(dataset: str, n_candidates: int = 100) -> SuggestedTriplet:
+def suggest_triplet(
+    dataset: str, user_id: str | None = None, n_candidates: int = 100,
+) -> SuggestedTriplet:
     """Suggest a triplet using diversity + uncertainty sampling.
 
     Args:
         dataset: The dataset name
+        user_id: Optional user to scope the suggestion to
         n_candidates: Number of candidate triplets to sample
 
     Returns:
         SuggestedTriplet with the best scoring triplet
     """
-    model = get_model(dataset)
+    key = _state_key(dataset, user_id)
+    model = get_model(dataset, user_id)
     embeddings = get_embeddings(dataset)
     clusters = get_clusters(dataset)
-    anchor_counts = get_anchor_counts(dataset)
+    anchor_counts = get_anchor_counts(dataset, user_id)
 
     ids = list(embeddings.keys())
     max_anchor_count = max(anchor_counts.values()) if anchor_counts else 1
@@ -509,7 +556,7 @@ def suggest_triplet(dataset: str, n_candidates: int = 100) -> SuggestedTriplet:
         scores = np.array(all_scores)
 
         logger.info(
-            f"Active learning [{dataset}]: sampled {n_candidates} candidates | "
+            f"Active learning [{key}]: sampled {n_candidates} candidates | "
             f"uncertainty: mean={uncertainties.mean():.3f},"
             f" max={uncertainties.max():.3f} | "
             f"diversity: mean={diversities.mean():.3f},"
@@ -526,7 +573,7 @@ def suggest_triplet(dataset: str, n_candidates: int = 100) -> SuggestedTriplet:
         import random
 
         logger.warning(
-            f"Active learning [{dataset}]:"
+            f"Active learning [{key}]:"
             " no valid candidates, falling back to random"
         )
         anchor = random.choice(ids)
@@ -585,42 +632,54 @@ def _cluster_diversity(
     return 0.5 * options_diff + 0.5 * anchor_diff
 
 
-def get_model_status(dataset: str) -> ModelStatus:
-    """Get the status of the model for a dataset."""
-    latest_version = _get_latest_version(dataset)
+def get_model_status(
+    dataset: str, user_id: str | None = None,
+) -> ModelStatus:
+    """Get the status of the model for a dataset (and optional user)."""
+    key = _state_key(dataset, user_id)
+    latest_version = _get_latest_version(dataset, user_id)
     weights_exist = latest_version is not None
-    path = _version_path(dataset, latest_version) if latest_version else None
+    path = (
+        _version_path(dataset, latest_version, user_id)
+        if latest_version else None
+    )
 
-    # Also check legacy location
-    legacy_path = _legacy_weights_path(dataset)
-    if not weights_exist and legacy_path.exists():
-        weights_exist = True
-        path = legacy_path
+    # Also check legacy location (global models only)
+    if user_id is None:
+        legacy_path = _legacy_weights_path(dataset)
+        if not weights_exist and legacy_path.exists():
+            weights_exist = True
+            path = legacy_path
 
-    # Count triplets
+    # Count triplets (scoped to user if provided)
     db_path = TRIPLETS_DB
     num_triplets = 0
     if db_path.exists():
         conn = sqlite3.connect(db_path)
-        row = conn.execute(
-            "SELECT COUNT(*) FROM triplets WHERE dataset = ? AND choice IS NOT NULL",
-            (dataset,),
-        ).fetchone()
+        query = (
+            "SELECT COUNT(*) FROM triplets"
+            " WHERE dataset = ? AND choice IS NOT NULL"
+        )
+        params: list[str] = [dataset]
+        if user_id is not None:
+            query += " AND user_id = ?"
+            params.append(user_id)
+        row = conn.execute(query, params).fetchone()
         num_triplets = row[0] if row else 0
         conn.close()
 
     # Check if model is loaded
-    loaded = dataset in _models
+    loaded = key in _models
     dim = None
     train_accuracy = None
 
     if loaded:
-        dim = _models[dataset].weights.shape[0]
+        dim = _models[key].weights.shape[0]
 
     if weights_exist and path:
         # Try reading JSON metadata first (for versioned models)
         if latest_version is not None:
-            meta_path = _metadata_path(dataset, latest_version)
+            meta_path = _metadata_path(dataset, latest_version, user_id)
             if meta_path.exists():
                 try:
                     with open(meta_path) as f:
@@ -656,8 +715,14 @@ def get_model_status(dataset: str) -> ModelStatus:
     )
 
 
-def trigger_background_retrain(dataset: str) -> None:
+def trigger_background_retrain(
+    dataset: str, user_id: str | None = None,
+) -> None:
     """Trigger a full retrain in a background thread."""
-    thread = threading.Thread(target=full_retrain, args=(dataset,), daemon=True)
+    key = _state_key(dataset, user_id)
+    thread = threading.Thread(
+        target=full_retrain, args=(dataset,),
+        kwargs={"user_id": user_id}, daemon=True,
+    )
     thread.start()
-    print(f"Started background retrain for {dataset}")
+    print(f"Started background retrain for {key}")

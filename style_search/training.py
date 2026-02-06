@@ -94,19 +94,24 @@ class EqualityDataset(Dataset):
         )
 
 
-def load_triplets(db_path: Path, dataset: str) -> list[tuple[str, str, str]]:
+def load_triplets(
+    db_path: Path, dataset: str, user_id: str | None = None
+) -> list[tuple[str, str, str]]:
     """Load triplets from SQLite database."""
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
-    rows = conn.execute(
-        """
+    query = """
         SELECT anchor, option_a, option_b, choice
         FROM triplets
         WHERE dataset = ? AND choice IS NOT NULL
-        """,
-        (dataset,),
-    ).fetchall()
+    """
+    params: list[str] = [dataset]
+    if user_id is not None:
+        query += " AND user_id = ?"
+        params.append(user_id)
+
+    rows = conn.execute(query, params).fetchall()
     conn.close()
 
     triplets = []
@@ -122,7 +127,7 @@ def load_triplets(db_path: Path, dataset: str) -> list[tuple[str, str, str]]:
 
 
 def load_equality_constraints(
-    db_path: Path, dataset: str
+    db_path: Path, dataset: str, user_id: str | None = None
 ) -> list[tuple[str, str, str]]:
     """Load equality constraints from skipped triplets.
 
@@ -132,16 +137,19 @@ def load_equality_constraints(
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
-    rows = conn.execute(
-        """
+    query = """
         SELECT anchor, option_a, option_b
         FROM triplets
         WHERE dataset = ?
             AND choice IS NULL
             AND skip_reason IN ('too_similar', 'anchor_outlier')
-        """,
-        (dataset,),
-    ).fetchall()
+    """
+    params: list[str] = [dataset]
+    if user_id is not None:
+        query += " AND user_id = ?"
+        params.append(user_id)
+
+    rows = conn.execute(query, params).fetchall()
     conn.close()
 
     return [(row["anchor"], row["option_a"], row["option_b"]) for row in rows]
@@ -272,7 +280,10 @@ def evaluate(
 
 
 def load_multi_dataset(
-    db_path: Path, datasets: list[str], balance_datasets: bool = False
+    db_path: Path,
+    datasets: list[str],
+    balance_datasets: bool = False,
+    user_id: str | None = None,
 ) -> tuple[
     list[tuple[str, str, str]],
     list[tuple[str, str, str]],
@@ -305,7 +316,7 @@ def load_multi_dataset(
         print(f"\nLoading dataset '{dataset}'...")
 
         # Load triplets and prefix IDs
-        triplets = load_triplets(db_path, dataset)
+        triplets = load_triplets(db_path, dataset, user_id=user_id)
         prefixed_triplets = [
             (f"{dataset}:{a}", f"{dataset}:{p}", f"{dataset}:{n}")
             for a, p, n in triplets
@@ -315,7 +326,7 @@ def load_multi_dataset(
         print(f"  {len(triplets)} triplet judgments")
 
         # Load equality constraints and prefix IDs
-        equality = load_equality_constraints(db_path, dataset)
+        equality = load_equality_constraints(db_path, dataset, user_id=user_id)
         prefixed_equality = [
             (f"{dataset}:{a}", f"{dataset}:{oa}", f"{dataset}:{ob}")
             for a, oa, ob in equality

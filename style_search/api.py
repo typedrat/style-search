@@ -354,11 +354,19 @@ def create_triplet(
         assert cursor.lastrowid is not None
         triplet_id = cursor.lastrowid
 
-        # Count triplets for this dataset to check if we need a full retrain (all users)
-        count_row = conn.execute(
-            "SELECT COUNT(*) FROM triplets WHERE dataset = ? AND choice IS NOT NULL",
-            (triplet.dataset,),
-        ).fetchone()
+        # Count user's triplets for retrain threshold
+        if user_id is not None:
+            count_row = conn.execute(
+                "SELECT COUNT(*) FROM triplets"
+                " WHERE dataset = ? AND choice IS NOT NULL AND user_id = ?",
+                (triplet.dataset, user_id),
+            ).fetchone()
+        else:
+            count_row = conn.execute(
+                "SELECT COUNT(*) FROM triplets"
+                " WHERE dataset = ? AND choice IS NOT NULL",
+                (triplet.dataset,),
+            ).fetchone()
         triplet_count = count_row[0] if count_row else 0
 
     # Trigger warm update if this is a real choice (not a skip)
@@ -371,7 +379,8 @@ def create_triplet(
 
         try:
             similarity.warm_update(
-                triplet.dataset, (triplet.anchor, positive, negative)
+                triplet.dataset, (triplet.anchor, positive, negative),
+                user_id=user_id,
             )
 
             # Trigger full retrain every FULL_RETRAIN_INTERVAL triplets
@@ -383,11 +392,12 @@ def create_triplet(
             if retrain_due:
                 background_tasks.add_task(
                     similarity.full_retrain, triplet.dataset,
+                    user_id,
                 )
                 print(
                     f"Queued background retrain for"
                     f" {triplet.dataset}"
-                    f" (triplet #{triplet_count})"
+                    f" (user={user_id}, triplet #{triplet_count})"
                 )
         except Exception as e:
             # Log but don't fail the request
@@ -520,13 +530,15 @@ def delete_triplet(triplet_id: int, user: str | None = None):
 
 
 @app.get("/api/datasets/{dataset}/suggest-triplet")
-def suggest_triplet(dataset: str) -> SuggestedTripletResponse:
+def suggest_triplet(
+    dataset: str, user: str | None = Query(None),
+) -> SuggestedTripletResponse:
     """Suggest a triplet using active learning (uncertainty + diversity sampling)."""
     # Verify dataset exists
     get_collection(dataset)
 
     try:
-        suggested = similarity.suggest_triplet(dataset)
+        suggested = similarity.suggest_triplet(dataset, user_id=user)
         return SuggestedTripletResponse(
             anchor=suggested.anchor,
             option_a=suggested.option_a,
@@ -541,14 +553,17 @@ def suggest_triplet(dataset: str) -> SuggestedTripletResponse:
 
 
 @app.post("/api/datasets/{dataset}/retrain")
-def retrain_model(dataset: str, background_tasks: BackgroundTasks) -> RetrainResponse:
+def retrain_model(
+    dataset: str, background_tasks: BackgroundTasks,
+    user: str | None = Query(None),
+) -> RetrainResponse:
     """Trigger a full model retrain."""
     # Verify dataset exists
     get_collection(dataset)
 
     try:
         # Run synchronously for now to return metrics
-        result = similarity.full_retrain(dataset)
+        result = similarity.full_retrain(dataset, user_id=user)
         return RetrainResponse(**result)
     except Exception as e:
         raise HTTPException(
@@ -557,13 +572,15 @@ def retrain_model(dataset: str, background_tasks: BackgroundTasks) -> RetrainRes
 
 
 @app.get("/api/datasets/{dataset}/model-status")
-def get_model_status(dataset: str) -> ModelStatusResponse:
+def get_model_status(
+    dataset: str, user: str | None = Query(None),
+) -> ModelStatusResponse:
     """Get the status of the similarity model for a dataset."""
     # Verify dataset exists
     get_collection(dataset)
 
     try:
-        status = similarity.get_model_status(dataset)
+        status = similarity.get_model_status(dataset, user_id=user)
         return ModelStatusResponse(
             loaded=status.loaded,
             dim=status.dim,

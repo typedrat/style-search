@@ -132,6 +132,11 @@ def _init_dataset_model(
     default=0.01,
     help="L2 regularization weight (pulls weights toward uniform)",
 )
+@click.option(
+    "--user", "-u",
+    multiple=True,
+    help="Filter to specific user(s) by token. Repeatable. Omit for all users.",
+)
 def train_cmd(
     datasets: tuple[str, ...],
     epochs: int,
@@ -145,6 +150,7 @@ def train_cmd(
     test_split: float,
     seed: int,
     l2_weight: float,
+    user: tuple[str, ...],
 ):
     """Train similarity weights from triplet judgments.
 
@@ -156,16 +162,34 @@ def train_cmd(
     if not db_path.exists():
         raise FileNotFoundError(f"Triplets database not found: {db_path}")
 
+    # Resolve user filter: empty tuple means all users (None)
+    user_ids: list[str] | None = list(user) if user else None
+    if user_ids:
+        print(f"Filtering to user(s): {', '.join(user_ids)}")
+
+    # Helper: load and combine triplets/equality for multiple users
+    def _load_for_users(
+        loader, db_path: Path, dataset: str, user_ids: list[str] | None,
+    ):
+        if user_ids is None:
+            return loader(db_path, dataset)
+        combined = []
+        for uid in user_ids:
+            combined.extend(loader(db_path, dataset, user_id=uid))
+        return combined
+
     # Load data from all datasets
     triplet_weights = None
     if len(datasets) == 1:
         # Single dataset - use original logic (no prefixing)
         dataset = datasets[0]
         print(f"Loading triplets for dataset '{dataset}'...")
-        triplets = load_triplets(db_path, dataset)
+        triplets = _load_for_users(load_triplets, db_path, dataset, user_ids)
         print(f"Found {len(triplets)} triplet judgments")
 
-        equality_constraints = load_equality_constraints(db_path, dataset)
+        equality_constraints = _load_for_users(
+            load_equality_constraints, db_path, dataset, user_ids,
+        )
         n_eq = len(equality_constraints)
         print(f"Found {n_eq} equality constraints"
               " (too_similar/anchor_outlier skips)")
@@ -176,11 +200,31 @@ def train_cmd(
     else:
         # Multiple datasets - combine with prefixed IDs
         print(f"Loading {len(datasets)} datasets: {', '.join(datasets)}")
-        (triplets, equality_constraints,
-         embeddings, triplet_weights) = load_multi_dataset(
-            db_path, list(datasets),
-            balance_datasets=balance_datasets,
-        )
+        if user_ids and len(user_ids) > 1:
+            # Multiple users: load each user's data and combine
+            all_triplets: list[tuple[str, str, str]] = []
+            all_eq: list[tuple[str, str, str]] = []
+            for uid in user_ids:
+                t, e, _, _ = load_multi_dataset(
+                    db_path, list(datasets), user_id=uid,
+                )
+                all_triplets.extend(t)
+                all_eq.extend(e)
+            # Load embeddings once (they're user-independent)
+            _, _, embeddings, _ = load_multi_dataset(
+                db_path, list(datasets),
+            )
+            triplets = all_triplets
+            equality_constraints = all_eq
+        else:
+            # No users or single user
+            single_uid = user_ids[0] if user_ids else None
+            (triplets, equality_constraints,
+             embeddings, triplet_weights) = load_multi_dataset(
+                db_path, list(datasets),
+                balance_datasets=balance_datasets,
+                user_id=single_uid,
+            )
         print(
             f"\nCombined: {len(triplets)} triplets,"
             f" {len(equality_constraints)} equality"
