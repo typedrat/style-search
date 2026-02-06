@@ -11,7 +11,15 @@ let
 
   # Properties to pass through to systemd-run (exclude service-specific ones)
   excludedProps = [ "Type" "ExecStart" "ExecReload" "ExecStop" "Restart" "RestartSec" ];
-  serviceConfigProps = lib.filterAttrs (k: v: !(builtins.elem k excludedProps)) serviceCfg.serviceConfig;
+  serviceConfigProps = lib.filterAttrs (k: v:
+    !(builtins.elem k excludedProps) && v != null && v != "" && v != [ ]
+  ) serviceCfg.serviceConfig;
+
+  # Convert serviceConfig values to strings suitable for systemd --property=
+  valueToString = v:
+    if builtins.isBool v then (if v then "yes" else "no")
+    else if builtins.isList v then lib.concatStringsSep " " (map toString v)
+    else toString v;
 
   # Admin CLI wrapper that runs commands in the same systemd context as the service
   adminScript = pkgs.writeShellScriptBin "style-search-admin" ''
@@ -21,7 +29,7 @@ let
       --wait \
       --collect \
       --service-type=exec \
-      ${lib.concatStringsSep " \\\n      " (lib.mapAttrsToList (k: v: "--property=${k}=${toString v}") serviceConfigProps)} \
+      ${lib.concatStringsSep " \\\n      " (lib.mapAttrsToList (k: v: "--property=${k}=${valueToString v}") serviceConfigProps)} \
       ${lib.concatStringsSep " \\\n      " (lib.mapAttrsToList (k: v: "--property=Environment=${k}=${toString v}") serviceCfg.environment)} \
       ${cfg.package}/bin/style-api "$@"
   '';
