@@ -17,7 +17,7 @@
       systems = ["x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin"];
 
       flake.nixosModules = rec {
-        style-search = import ./nix/modules/style-search.nix { self = inputs.self; };
+        style-search = import ./nix/modules/style-search.nix {self = inputs.self;};
         default = style-search;
       };
 
@@ -44,7 +44,7 @@
 
         packages = rec {
           style-search = pkgs.callPackage ./nix/packages/style-search.nix {
-            bun2nix = inputs.bun2nix.packages.${system}.default;
+            inherit (inputs.bun2nix.packages.${system}) bun2nix;
           };
           default = style-search;
         };
@@ -55,6 +55,7 @@
               python313
               uv
               bun
+              inputs.bun2nix.packages.${system}.bun2nix
               process-compose
               sqlite
             ]

@@ -657,6 +657,10 @@
     url = "https://registry.npmjs.org/@rollup/rollup-win32-x64-msvc/-/rollup-win32-x64-msvc-4.57.1.tgz";
     hash = "sha512-mxRFDdHIWRxg3UfIIAwCm6NzvxG0jDX/wBN6KsQFTvKFqqg9vTrWUE68qEjHt19A5wwx5X5aUi2zuZT7YR0jrA==";
   };
+  "@stylistic/eslint-plugin@5.7.1" = fetchurl {
+    url = "https://registry.npmjs.org/@stylistic/eslint-plugin/-/eslint-plugin-5.7.1.tgz";
+    hash = "sha512-zjTUwIsEfT+k9BmXwq1QEFYsb4afBlsI1AXFyWQBgggMzwBFOuu92pGrE5OFx90IOjNl+lUbQoTG7f8S0PkOdg==";
+  };
   "@tailwindcss/node@4.1.18" = fetchurl {
     url = "https://registry.npmjs.org/@tailwindcss/node/-/node-4.1.18.tgz";
     hash = "sha512-DoR7U1P7iYhw16qJ49fgXUlry1t4CpXeErJHnQ44JgTSKMaZUdf17cfn5mHchfJ4KRBZRFA/Coo+MUF5+gOaCQ==";
