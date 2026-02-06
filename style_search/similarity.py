@@ -32,24 +32,58 @@ from style_search.training import (
     train,
 )
 
-# Configure logging to file
+# Configure per-user logging
 LOG_DIR.mkdir(parents=True, exist_ok=True)
-LOG_FILE = LOG_DIR / "active_learning.log"
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+_LOG_FORMATTER = logging.Formatter(
+    "%(asctime)s | %(levelname)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+_user_loggers: dict[str | None, logging.Logger] = {}
+_user_names: dict[str, str] = {}  # token -> name cache
 
-# File handler - append mode
-if not logger.handlers:
-    _handler = logging.FileHandler(LOG_FILE, mode="a")
-    _handler.setLevel(logging.INFO)
-    _handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s | %(levelname)s | %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
-    )
-    logger.addHandler(_handler)
+
+def _resolve_user_name(user_id: str) -> str:
+    """Look up a user's name from their token."""
+    if user_id in _user_names:
+        return _user_names[user_id]
+    try:
+        conn = sqlite3.connect(TRIPLETS_DB)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT name FROM users WHERE token = ?", (user_id,),
+        ).fetchone()
+        conn.close()
+        name = row["name"] if row else user_id[:8]
+    except Exception:
+        name = user_id[:8]
+    _user_names[user_id] = name
+    return name
+
+
+def get_user_logger(user_id: str | None = None) -> logging.Logger:
+    """Get a per-user logger that writes to data/logs/{user_name}.log."""
+    if user_id in _user_loggers:
+        return _user_loggers[user_id]
+
+    if user_id is None:
+        log_file = LOG_DIR / "anonymous.log"
+        logger_name = f"{__name__}.anonymous"
+    else:
+        name = _resolve_user_name(user_id)
+        log_file = LOG_DIR / f"{name}.log"
+        logger_name = f"{__name__}.user.{user_id}"
+
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(logging.INFO)
+    if not logger.handlers:
+        handler = logging.FileHandler(log_file, mode="a")
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(_LOG_FORMATTER)
+        logger.addHandler(handler)
+
+    _user_loggers[user_id] = logger
+    return logger
 
 # In-memory state (per dataset)
 _models: dict[str, WeightedDistance] = {}
@@ -362,7 +396,9 @@ def warm_update(
         ]
 
         if not valid_triplets:
-            logger.debug(f"Warm update [{key}]: no valid triplets in cache")
+            get_user_logger(user_id).debug(
+                f"Warm update [{key}]: no valid triplets in cache"
+            )
             return
 
         # Prepare tensors
@@ -392,7 +428,7 @@ def warm_update(
             optimizer.step()
             final_loss = loss.item()
 
-        logger.info(
+        get_user_logger(user_id).info(
             f"Warm update [{key}]: {len(valid_triplets)} triplets, "
             f"{WARM_UPDATE_STEPS} steps, loss {initial_loss:.4f} -> {final_loss:.4f}"
         )
@@ -404,7 +440,8 @@ def full_retrain(dataset: str, user_id: str | None = None) -> dict:
     Returns metrics dict with train_accuracy, baseline_accuracy, etc.
     """
     key = _state_key(dataset, user_id)
-    logger.info(f"Full retrain [{key}]: starting")
+    ulog = get_user_logger(user_id)
+    ulog.info(f"Full retrain [{key}]: starting")
     lock = _get_lock(dataset, user_id)
     with lock:
         db_path = TRIPLETS_DB
@@ -412,7 +449,7 @@ def full_retrain(dataset: str, user_id: str | None = None) -> dict:
         embeddings = get_embeddings(dataset)
 
         if not triplets:
-            logger.warning(f"Full retrain [{key}]: no triplets found")
+            ulog.warning(f"Full retrain [{key}]: no triplets found")
             return {"error": "No triplets found", "num_triplets": 0}
 
         # Initialize fresh model
@@ -429,7 +466,7 @@ def full_retrain(dataset: str, user_id: str | None = None) -> dict:
         triplet_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 
         # Train
-        logger.info(
+        ulog.info(
             f"Full retrain [{key}]: training on {len(triplets)} triplets"
         )
         loss_history = train(
@@ -465,7 +502,7 @@ def full_retrain(dataset: str, user_id: str | None = None) -> dict:
         # Clear triplet cache
         _triplet_cache[key] = []
 
-        logger.info(
+        ulog.info(
             f"Full retrain [{key}]: complete v{version:03d} | "
             f"accuracy {baseline_acc:.1%} -> {train_acc:.1%}"
             f" (+{train_acc - baseline_acc:.1%})"
@@ -550,12 +587,13 @@ def suggest_triplet(
                 best_diversity = diversity
 
     # Log active learning statistics
+    ulog = get_user_logger(user_id)
     if all_scores:
         uncertainties = np.array(all_uncertainties)
         diversities = np.array(all_diversities)
         scores = np.array(all_scores)
 
-        logger.info(
+        ulog.info(
             f"Active learning [{key}]: sampled {n_candidates} candidates | "
             f"uncertainty: mean={uncertainties.mean():.3f},"
             f" max={uncertainties.max():.3f} | "
@@ -572,7 +610,7 @@ def suggest_triplet(
         # Fallback to random
         import random
 
-        logger.warning(
+        ulog.warning(
             f"Active learning [{key}]:"
             " no valid candidates, falling back to random"
         )

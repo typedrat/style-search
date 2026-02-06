@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from style_search import similarity
 from style_search.config import dataset_chroma_path
 from style_search.db import get_db, init_db
+from style_search.similarity import get_user_logger
 
 app = FastAPI(title="Style Search API")
 
@@ -354,6 +355,24 @@ def create_triplet(
         assert cursor.lastrowid is not None
         triplet_id = cursor.lastrowid
 
+    # Log the triplet
+    ulog = get_user_logger(user_id)
+    if triplet.choice is not None:
+        ulog.info(
+            f"Triplet #{triplet_id} [{triplet.dataset}]:"
+            f" anchor={triplet.anchor}"
+            f" a={triplet.option_a} b={triplet.option_b}"
+            f" choice={triplet.choice}"
+        )
+    else:
+        ulog.info(
+            f"Triplet #{triplet_id} [{triplet.dataset}]:"
+            f" anchor={triplet.anchor}"
+            f" a={triplet.option_a} b={triplet.option_b}"
+            f" skip={triplet.skip_reason}"
+        )
+
+    with get_db() as conn:
         # Count user's triplets for retrain threshold
         if user_id is not None:
             count_row = conn.execute(
